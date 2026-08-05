@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: smunai-lead-service
+    runtime: node
+    plan: free
+    buildCommand: ""
+    startCommand: node server.js
+    envVars:
+      - key: PORT
+        value: 4000
+      - key: PUBLIC_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: DB_PATH
+        value: ./data/leads.db
+      - key: SECURE_COOKIES
+        value: "1"
