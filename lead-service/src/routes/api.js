@@ -1,0 +1,454 @@
+import { db } from '../db.js';
+import { json, readInput } from '../http.js';
+import {
+  currentUser, createSession, sessionCookie, clearCookie,
+  destroySession, verifyPassword, hashPassword,
+} from '../auth.js';
+import { updateLead } from '../leads.js';
+import { clip, randomKey, STATUSES, isEmail } from '../util.js';
+
+const LEAD_COLUMNS = `
+  l.*,
+  u.name AS assigned_name,
+  s.name AS site_name,
+  s.sla_minutes AS sla_minutes
+`;
+const LEAD_FROM = `
+  FROM leads l
+  LEFT JOIN users u ON u.id = l.assigned_to
+  LEFT JOIN sites s ON s.id = l.site_id
+`;
+
+function buildFilters(url, user) {
+  const where = [];
+  const args = [];
+
+  const status = url.searchParams.get('status');
+  if (status && status !== 'all') {
+    const list = status.split(',').filter((s) => STATUSES[s]);
+    if (list.length) {
+      where.push(`l.status IN (${list.map(() => '?').join(',')})`);
+      args.push(...list);
+    }
+  }
+
+  const assigned = url.searchParams.get('assigned');
+  if (assigned === 'me') {
+    where.push('l.assigned_to = ?');
+    args.push(user.id);
+  } else if (assigned === 'none') {
+    where.push('l.assigned_to IS NULL');
+  } else if (assigned) {
+    where.push('l.assigned_to = ?');
+    args.push(Number(assigned));
+  }
+
+  const site = url.searchParams.get('site');
+  if (site) {
+    where.push('l.site_id = ?');
+    args.push(Number(site));
+  }
+
+  const q = clip(url.searchParams.get('q'), 80);
+  if (q) {
+    const digits = q.replace(/\D+/g, '');
+    where.push('(l.name LIKE ? OR l.email LIKE ? OR l.comment LIKE ?' + (digits ? ' OR l.phone_norm LIKE ?' : '') + ')');
+    args.push(`%${q}%`, `%${q}%`, `%${q}%`);
+    if (digits) args.push(`%${digits}%`);
+  }
+
+  const from = url.searchParams.get('from');
+  if (from) {
+    where.push('l.created_at >= ?');
+    args.push(`${from} 00:00:00`);
+  }
+  const to = url.searchParams.get('to');
+  if (to) {
+    where.push('l.created_at <= ?');
+    args.push(`${to} 23:59:59`);
+  }
+
+  if (url.searchParams.get('overdue') === '1') {
+    where.push("l.status = 'new' AND l.created_at < datetime('now', '-' || COALESCE(s.sla_minutes, 15) || ' minutes')");
+  }
+
+  return { sql: where.length ? 'WHERE ' + where.join(' AND ') : '', args };
+}
+
+function listLeads(url, user) {
+  const { sql, args } = buildFilters(url, user);
+  const limit = Math.min(Number(url.searchParams.get('limit') || 50), 500);
+  const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
+
+  const rows = db
+    .prepare(`SELECT ${LEAD_COLUMNS} ${LEAD_FROM} ${sql} ORDER BY l.created_at DESC, l.id DESC LIMIT ? OFFSET ?`)
+    .all(...args, limit, offset);
+  const total = db.prepare(`SELECT COUNT(*) AS c ${LEAD_FROM} ${sql}`).get(...args).c;
+
+  return { items: rows, total, limit, offset };
+}
+
+function stats() {
+  const byStatus = db.prepare('SELECT status, COUNT(*) AS c FROM leads GROUP BY status').all();
+  const counts = Object.fromEntries(Object.keys(STATUSES).map((k) => [k, 0]));
+  for (const r of byStatus) counts[r.status] = r.c;
+
+  const period = (expr) => db.prepare(`SELECT COUNT(*) AS c FROM leads WHERE created_at > datetime('now', ?)`).get(expr).c;
+
+  const responseRow = db
+    .prepare(
+      `SELECT AVG((julianday(first_touch_at) - julianday(created_at)) * 24 * 60) AS avg_min
+         FROM leads WHERE first_touch_at IS NOT NULL AND created_at > datetime('now','-30 days')`,
+    )
+    .get();
+
+  const overdue = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM leads l LEFT JOIN sites s ON s.id = l.site_id
+        WHERE l.status = 'new'
+          AND l.created_at < datetime('now', '-' || COALESCE(s.sla_minutes, 15) || ' minutes')`,
+    )
+    .get().c;
+
+  const bySource = db
+    .prepare(
+      `SELECT CASE WHEN utm_source = '' THEN 'прямой заход' ELSE utm_source END AS source,
+              COUNT(*) AS total,
+              SUM(status = 'won') AS won
+         FROM leads WHERE created_at > datetime('now','-30 days')
+        GROUP BY source ORDER BY total DESC LIMIT 10`,
+    )
+    .all();
+
+  const byManager = db
+    .prepare(
+      `SELECT u.id, u.name,
+              COUNT(l.id) AS total,
+              SUM(l.status = 'won') AS won,
+              SUM(l.status IN ('new','in_work','callback')) AS open
+         FROM users u LEFT JOIN leads l
+           ON l.assigned_to = u.id AND l.created_at > datetime('now','-30 days')
+        WHERE u.active = 1
+        GROUP BY u.id ORDER BY total DESC`,
+    )
+    .all();
+
+  const revenue = db
+    .prepare("SELECT COALESCE(SUM(amount), 0) AS sum FROM leads WHERE status = 'won' AND closed_at > datetime('now','-30 days')")
+    .get().sum;
+
+  const closed = counts.won + counts.lost;
+  return {
+    counts,
+    total: Object.values(counts).reduce((a, b) => a + b, 0),
+    today: period('-1 day'),
+    week: period('-7 days'),
+    month: period('-30 days'),
+    avgResponseMinutes: responseRow.avg_min ? Math.round(responseRow.avg_min * 10) / 10 : null,
+    conversion: closed ? Math.round((counts.won / closed) * 1000) / 10 : null,
+    overdue,
+    revenue,
+    bySource,
+    byManager,
+  };
+}
+
+function toCsv(rows) {
+  const head = [
+    'ID', 'Дата', 'Имя', 'Телефон', 'Email', 'Комментарий', 'Статус',
+    'Ответственный', 'Сайт', 'Источник', 'Кампания', 'Страница', 'Сумма',
+  ];
+  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const lines = [head.map(esc).join(';')];
+  for (const r of rows) {
+    lines.push([
+      r.id, r.created_at, r.name, r.phone, r.email, r.comment, STATUSES[r.status] || r.status,
+      r.assigned_name || '', r.site_name || '', r.utm_source, r.utm_campaign, r.page_url,
+      r.amount ?? '',
+    ].map(esc).join(';'));
+  }
+  return '﻿' + lines.join('\r\n');
+}
+
+/** @returns {boolean} обработан ли запрос */
+export async function handleApi(req, res, url) {
+  const p = url.pathname;
+  if (!p.startsWith('/api/')) return false;
+
+  /* ---------- аутентификация ---------- */
+
+  if (p === '/api/auth/login' && req.method === 'POST') {
+    const body = await readInput(req);
+    const email = clip(body.email, 160).toLowerCase();
+    const row = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(email);
+    if (!row || !verifyPassword(body.password || '', row.password_hash)) {
+      json(res, 401, { ok: false, message: 'Неверный email или пароль' });
+      return true;
+    }
+    const s = await createSession(db, row.id);
+    json(
+      res, 200,
+      { ok: true, user: { id: row.id, name: row.name, email: row.email, role: row.role } },
+      { 'Set-Cookie': sessionCookie(s.id, s.expires) },
+    );
+    return true;
+  }
+
+  const user = currentUser(db, req);
+
+  if (p === '/api/auth/logout' && req.method === 'POST') {
+    destroySession(db, user?.sid);
+    json(res, 200, { ok: true }, { 'Set-Cookie': clearCookie() });
+    return true;
+  }
+
+  if (!user) {
+    json(res, 401, { ok: false, error: 'unauthorized' });
+    return true;
+  }
+
+  // защита от CSRF: у мутаций Origin обязан совпадать с хостом сервиса
+  if (req.method !== 'GET' && req.headers.origin) {
+    try {
+      if (new URL(req.headers.origin).host !== req.headers.host) {
+        json(res, 403, { ok: false, error: 'bad_origin' });
+        return true;
+      }
+    } catch {
+      json(res, 403, { ok: false, error: 'bad_origin' });
+      return true;
+    }
+  }
+
+  const isAdmin = user.role === 'admin';
+  const denyNonAdmin = () => {
+    json(res, 403, { ok: false, message: 'Недостаточно прав' });
+    return true;
+  };
+
+  if (p === '/api/me') {
+    json(res, 200, { ok: true, user });
+    return true;
+  }
+
+  /* ---------- заявки ---------- */
+
+  if (p === '/api/leads' && req.method === 'GET') {
+    json(res, 200, { ok: true, ...listLeads(url, user) });
+    return true;
+  }
+
+  if (p === '/api/leads' && req.method === 'POST') {
+    // ручное добавление заявки менеджером (звонок, визит и т.п.)
+    const body = await readInput(req);
+    const { createLead } = await import('../leads.js');
+    const result = createLead({ ...body, form_id: 'manual' }, { site: null, ip: '', userAgent: 'manual' });
+    if (!result.ok) {
+      json(res, 400, result);
+      return true;
+    }
+    db.prepare('UPDATE leads SET assigned_to = COALESCE(assigned_to, ?) WHERE id = ?').run(user.id, result.lead.id);
+    json(res, 201, { ok: true, lead: result.lead });
+    return true;
+  }
+
+  if (p === '/api/leads/export.csv') {
+    const { sql, args } = buildFilters(url, user);
+    const rows = db.prepare(`SELECT ${LEAD_COLUMNS} ${LEAD_FROM} ${sql} ORDER BY l.created_at DESC`).all(...args);
+    res.writeHead(200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="leads-${new Date().toISOString().slice(0, 10)}.csv"`,
+      'Cache-Control': 'no-store',
+    });
+    res.end(toCsv(rows));
+    return true;
+  }
+
+  const leadMatch = p.match(/^\/api\/leads\/(\d+)$/);
+  if (leadMatch) {
+    const id = Number(leadMatch[1]);
+    if (req.method === 'GET') {
+      const lead = db.prepare(`SELECT ${LEAD_COLUMNS} ${LEAD_FROM} WHERE l.id = ?`).get(id);
+      if (!lead) {
+        json(res, 404, { ok: false, error: 'not_found' });
+        return true;
+      }
+      const events = db
+        .prepare(
+          `SELECT e.*, u.name AS user_name FROM lead_events e
+             LEFT JOIN users u ON u.id = e.user_id
+            WHERE e.lead_id = ? ORDER BY e.id ASC`,
+        )
+        .all(id);
+      json(res, 200, { ok: true, lead, events });
+      return true;
+    }
+    if (req.method === 'PATCH' || req.method === 'PUT') {
+      const body = await readInput(req);
+      try {
+        const lead = updateLead(id, body, user);
+        if (!lead) {
+          json(res, 404, { ok: false, error: 'not_found' });
+          return true;
+        }
+        json(res, 200, { ok: true, lead });
+      } catch (e) {
+        json(res, e.status || 500, { ok: false, error: e.message });
+      }
+      return true;
+    }
+    if (req.method === 'DELETE') {
+      if (!isAdmin) return denyNonAdmin();
+      db.prepare('DELETE FROM leads WHERE id = ?').run(id);
+      json(res, 200, { ok: true });
+      return true;
+    }
+  }
+
+  const commentMatch = p.match(/^\/api\/leads\/(\d+)\/comments$/);
+  if (commentMatch && req.method === 'POST') {
+    const body = await readInput(req);
+    const text = clip(body.text, 2000);
+    if (!text) {
+      json(res, 400, { ok: false, message: 'Пустой комментарий' });
+      return true;
+    }
+    db.prepare('INSERT INTO lead_events (lead_id, user_id, type, text) VALUES (?, ?, ?, ?)').run(
+      Number(commentMatch[1]), user.id, 'comment', text,
+    );
+    db.prepare("UPDATE leads SET updated_at = datetime('now') WHERE id = ?").run(Number(commentMatch[1]));
+    json(res, 201, { ok: true });
+    return true;
+  }
+
+  if (p === '/api/stats' && req.method === 'GET') {
+    json(res, 200, { ok: true, stats: stats() });
+    return true;
+  }
+
+  /* ---------- сотрудники ---------- */
+
+  if (p === '/api/users' && req.method === 'GET') {
+    const rows = db.prepare('SELECT id, email, name, role, active, created_at FROM users ORDER BY id').all();
+    json(res, 200, { ok: true, items: rows });
+    return true;
+  }
+
+  if (p === '/api/users' && req.method === 'POST') {
+    if (!isAdmin) return denyNonAdmin();
+    const body = await readInput(req);
+    const email = clip(body.email, 160).toLowerCase();
+    const name = clip(body.name, 120);
+    const password = String(body.password || '');
+    if (!isEmail(email) || !name || password.length < 8) {
+      json(res, 400, { ok: false, message: 'Нужны корректный email, имя и пароль от 8 символов' });
+      return true;
+    }
+    if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) {
+      json(res, 409, { ok: false, message: 'Такой email уже есть' });
+      return true;
+    }
+    const info = db
+      .prepare('INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)')
+      .run(email, name, hashPassword(password), body.role === 'admin' ? 'admin' : 'manager');
+    json(res, 201, { ok: true, id: Number(info.lastInsertRowid) });
+    return true;
+  }
+
+  const userMatch = p.match(/^\/api\/users\/(\d+)$/);
+  if (userMatch && (req.method === 'PATCH' || req.method === 'PUT')) {
+    const id = Number(userMatch[1]);
+    if (!isAdmin && id !== user.id) return denyNonAdmin();
+    const body = await readInput(req);
+    const sets = [];
+    const args = [];
+    if (body.name) { sets.push('name = ?'); args.push(clip(body.name, 120)); }
+    if (body.password) {
+      if (String(body.password).length < 8) {
+        json(res, 400, { ok: false, message: 'Пароль от 8 символов' });
+        return true;
+      }
+      sets.push('password_hash = ?');
+      args.push(hashPassword(body.password));
+    }
+    if (isAdmin && 'active' in body) { sets.push('active = ?'); args.push(body.active ? 1 : 0); }
+    if (isAdmin && body.role) { sets.push('role = ?'); args.push(body.role === 'admin' ? 'admin' : 'manager'); }
+    if (!sets.length) {
+      json(res, 400, { ok: false, message: 'Нечего менять' });
+      return true;
+    }
+    db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...args, id);
+    json(res, 200, { ok: true });
+    return true;
+  }
+
+  /* ---------- сайты ---------- */
+
+  if (p === '/api/sites' && req.method === 'GET') {
+    const rows = db
+      .prepare(
+        `SELECT s.*, (SELECT COUNT(*) FROM leads l WHERE l.site_id = s.id) AS leads_count
+           FROM sites s ORDER BY s.id`,
+      )
+      .all();
+    json(res, 200, { ok: true, items: rows });
+    return true;
+  }
+
+  if (p === '/api/sites' && req.method === 'POST') {
+    if (!isAdmin) return denyNonAdmin();
+    const body = await readInput(req);
+    const name = clip(body.name, 120);
+    if (!name) {
+      json(res, 400, { ok: false, message: 'Укажите название сайта' });
+      return true;
+    }
+    const key = randomKey(24);
+    const info = db
+      .prepare('INSERT INTO sites (name, domains, public_key, auto_assign, sla_minutes, webhook_url) VALUES (?,?,?,?,?,?)')
+      .run(
+        name, clip(body.domains, 500), key,
+        body.auto_assign === false ? 0 : 1,
+        Number(body.sla_minutes) > 0 ? Number(body.sla_minutes) : 15,
+        clip(body.webhook_url, 500),
+      );
+    json(res, 201, { ok: true, id: Number(info.lastInsertRowid), public_key: key });
+    return true;
+  }
+
+  const siteMatch = p.match(/^\/api\/sites\/(\d+)(\/rotate)?$/);
+  if (siteMatch) {
+    if (!isAdmin) return denyNonAdmin();
+    const id = Number(siteMatch[1]);
+    if (siteMatch[2] && req.method === 'POST') {
+      const key = randomKey(24);
+      db.prepare('UPDATE sites SET public_key = ? WHERE id = ?').run(key, id);
+      json(res, 200, { ok: true, public_key: key });
+      return true;
+    }
+    if (req.method === 'PATCH' || req.method === 'PUT') {
+      const body = await readInput(req);
+      const sets = [];
+      const args = [];
+      if (body.name != null) { sets.push('name = ?'); args.push(clip(body.name, 120)); }
+      if (body.domains != null) { sets.push('domains = ?'); args.push(clip(body.domains, 500)); }
+      if (body.webhook_url != null) { sets.push('webhook_url = ?'); args.push(clip(body.webhook_url, 500)); }
+      if ('auto_assign' in body) { sets.push('auto_assign = ?'); args.push(body.auto_assign ? 1 : 0); }
+      if ('active' in body) { sets.push('active = ?'); args.push(body.active ? 1 : 0); }
+      if (body.sla_minutes != null && Number(body.sla_minutes) > 0) {
+        sets.push('sla_minutes = ?');
+        args.push(Number(body.sla_minutes));
+      }
+      if (!sets.length) {
+        json(res, 400, { ok: false, message: 'Нечего менять' });
+        return true;
+      }
+      db.prepare(`UPDATE sites SET ${sets.join(', ')} WHERE id = ?`).run(...args, id);
+      json(res, 200, { ok: true });
+      return true;
+    }
+  }
+
+  json(res, 404, { ok: false, error: 'not_found' });
+  return true;
+}

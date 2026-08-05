@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Заявки — отдел продаж</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%234f7cff'/><path d='M9 16h14M9 11h14M9 21h9' stroke='white' stroke-width='2.4' stroke-linecap='round'/></svg>">
+</head>
+<body>
+
+<!-- ЭКРАН ВХОДА -->
+<div class="login" id="loginScreen" hidden>
+  <form class="login__box card" id="loginForm">
+    <div class="login__logo">Заявки</div>
+    <p class="muted" style="margin-top:0">Панель отдела продаж</p>
+    <label class="field">
+      <span>Email</span>
+      <input type="email" name="email" autocomplete="username" required>
+    </label>
+    <label class="field">
+      <span>Пароль</span>
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <button class="btn btn--primary" style="width:100%" type="submit">Войти</button>
+    <p class="muted" id="loginError" style="color:var(--red);min-height:20px;margin:10px 0 0;font-size:13px"></p>
+  </form>
+</div>
+
+<!-- ПАНЕЛЬ -->
+<div class="layout" id="app" hidden>
+  <aside class="sidebar">
+    <div class="sidebar__brand"><span class="sidebar__dot"></span> Заявки</div>
+    <a class="nav-link" href="#/leads" data-nav="leads">
+      Все заявки <span class="badge-count" id="navNew" hidden></span>
+    </a>
+    <a class="nav-link" href="#/board" data-nav="board">Доска</a>
+    <a class="nav-link" href="#/stats" data-nav="stats">Аналитика</a>
+    <a class="nav-link" href="#/sites" data-nav="sites">Подключение сайта</a>
+    <a class="nav-link" href="#/team" data-nav="team">Сотрудники</a>
+    <div class="sidebar__spacer"></div>
+    <div class="sidebar__user">
+      <div id="userName" style="font-weight:500"></div>
+      <div class="muted" id="userRole" style="font-size:12px;margin-bottom:8px"></div>
+      <button class="btn btn--ghost btn--sm" id="logoutBtn">Выйти</button>
+    </div>
+  </aside>
+
+  <main class="content" id="view"></main>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "lead-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Сервис приёма и обработки заявок с сайта для отдела продаж",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "reset": "node scripts/reset.js"
+  }
+}

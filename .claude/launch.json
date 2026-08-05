@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "preview-static",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [".claude/static-server.js"],
+      "port": 5566
+    },
+    {
+      "name": "lead-service",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["lead-service/server.js"],
+      "port": 4000
+    },
+    {
+      "name": "smunai-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "smunai-digital-drive"],
+      "port": 3000
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# зависимости и сборки
+node_modules/
+
+# отдельный репозиторий, живёт своей жизнью:
+# github.com/baurnotbaur/smunai-digital-drive
+smunai-digital-drive/
+
+# служебный файл предпросмотра (2.4 МБ, генерируется заново)
+_preview.html
+
+# локальные настройки и база сервиса заявок
+lead-service/.env
+lead-service/data/
+
+.DS_Store
+Thumbs.db
