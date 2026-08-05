@@ -17,7 +17,7 @@
       "name": "smunai-dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "smunai-digital-drive"],
-      "port": 3000
+      "port": 8080
     }
   ]
 }
