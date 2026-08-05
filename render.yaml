@@ -3,6 +3,7 @@ services:
     name: smunai-lead-service
     runtime: node
     plan: free
+    rootDir: lead-service
     buildCommand: ""
     startCommand: node server.js
     envVars:
