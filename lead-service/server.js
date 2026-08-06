@@ -3,6 +3,7 @@ import path from 'node:path';
 import { config, ROOT } from './src/config.js';
 import { db } from './src/db.js';
 import { purgeExpiredSessions } from './src/auth.js';
+import { closeAll } from './src/events.js';
 import { send, serveStatic } from './src/http.js';
 import { handlePublic } from './src/routes/public.js';
 import { handleApi } from './src/routes/api.js';
@@ -49,6 +50,7 @@ server.listen(config.port, () => {
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
+    closeAll();
     server.close(() => {
       db.close();
       process.exit(0);

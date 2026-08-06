@@ -1,6 +1,7 @@
 import { db } from './db.js';
 import { clip, normalizePhone, isEmail, STATUSES } from './util.js';
 import { notifyNewLead } from './notify.js';
+import { broadcast } from './events.js';
 
 const DUPLICATE_WINDOW_MIN = 30;
 
@@ -137,6 +138,13 @@ export function createLead(input, meta) {
 
   const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   notifyNewLead(lead, site, manager);
+  broadcast('lead:new', {
+    id: lead.id,
+    name: lead.name,
+    phone: lead.phone,
+    site: site?.name || '',
+    is_duplicate: lead.is_duplicate,
+  });
   return { ok: true, lead };
 }
 
@@ -199,5 +207,7 @@ export function updateLead(id, patch, user) {
   const stmt = db.prepare('INSERT INTO lead_events (lead_id, user_id, type, text) VALUES (?, ?, ?, ?)');
   for (const [type, text] of events) stmt.run(id, user.id, type, text);
 
-  return db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const updated = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  broadcast('lead:update', { id, status: updated.status, by: user.id });
+  return updated;
 }

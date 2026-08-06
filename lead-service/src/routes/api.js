@@ -5,6 +5,7 @@ import {
   destroySession, verifyPassword, hashPassword,
 } from '../auth.js';
 import { updateLead } from '../leads.js';
+import { subscribe } from '../events.js';
 import { clip, randomKey, STATUSES, isEmail } from '../util.js';
 
 const LEAD_COLUMNS = `
@@ -228,6 +229,12 @@ export async function handleApi(req, res, url) {
 
   if (p === '/api/me') {
     json(res, 200, { ok: true, user });
+    return true;
+  }
+
+  // поток живых обновлений: панель сама подтягивает новые заявки
+  if (p === '/api/events' && req.method === 'GET') {
+    subscribe(req, res);
     return true;
   }
 

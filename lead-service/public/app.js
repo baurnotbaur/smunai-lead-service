@@ -73,6 +73,9 @@
   function showLogin() {
     $('#app').hidden = true;
     $('#loginScreen').hidden = false;
+    // без сессии поток событий всё равно отдаёт 401 — не переподключаемся вхолостую
+    connectEvents._es?.close();
+    connectEvents._es = null;
   }
 
   $('#loginForm').addEventListener('submit', async (e) => {
@@ -271,7 +274,11 @@
 
     let dragged = null;
     view.querySelectorAll('.board__card').forEach((card) => {
-      card.addEventListener('dragstart', () => (dragged = card));
+      card.addEventListener('dragstart', () => {
+        dragged = card;
+        card.classList.add('dragging');
+      });
+      card.addEventListener('dragend', () => card.classList.remove('dragging'));
       card.addEventListener('dblclick', () => (location.hash = '#/lead/' + card.dataset.id));
     });
     view.querySelectorAll('.board__col').forEach((col) => {
@@ -705,6 +712,56 @@
     } catch {}
   }
 
+  /* ---------- живые обновления ---------- */
+
+  /** Перерисовывать список на месте можно, только если он никому не мешает. */
+  function safeToRefresh() {
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return false;
+    return !document.querySelector('.board__card.dragging');
+  }
+
+  function currentPath() {
+    return (location.hash.replace(/^#/, '') || '/leads').split('?')[0];
+  }
+
+  function liveRefresh(changedId) {
+    refreshBadge();
+    const path = currentPath();
+    const onList = path === '/leads' || path === '/board';
+    const onChangedLead = changedId != null && path === '/lead/' + changedId;
+    if ((onList || onChangedLead) && safeToRefresh()) route();
+  }
+
+  function connectEvents() {
+    const es = new EventSource('/api/events');
+
+    es.addEventListener('lead:new', (e) => {
+      const lead = JSON.parse(e.data);
+      toast(`🔔 Новая заявка: ${lead.name || lead.phone || '№' + lead.id}`);
+      liveRefresh(lead.id);
+    });
+
+    es.addEventListener('lead:update', (e) => {
+      const { id, by } = JSON.parse(e.data);
+      // свои же изменения панель уже отрисовала — второй перерисовки не нужно
+      if (by === state.user.id) return;
+      liveRefresh(id);
+    });
+
+    // обрыв связи EventSource лечит сам; после 401 он закрывается — пробуем позже,
+    // но только пока пользователь залогинен
+    es.onerror = () => {
+      if (es.readyState !== EventSource.CLOSED) return;
+      setTimeout(() => {
+        if (connectEvents._es === es && !$('#app').hidden) connectEvents();
+      }, 5000);
+    };
+
+    connectEvents._es?.close();
+    connectEvents._es = es;
+  }
+
   async function boot() {
     const [users, sites] = await Promise.all([api('/users'), api('/sites')]);
     state.users = users.items;
@@ -717,6 +774,8 @@
 
     await route();
     refreshBadge();
+    connectEvents();
+    // страховка на случай, если поток событий оборвался незаметно
     clearInterval(boot._t);
     boot._t = setInterval(refreshBadge, 60000);
   }
