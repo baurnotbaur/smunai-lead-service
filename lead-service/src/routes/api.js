@@ -5,6 +5,7 @@ import {
   destroySession, verifyPassword, hashPassword,
 } from '../auth.js';
 import { updateLead } from '../leads.js';
+import { findCompany, createCompany, updateCompany, createContact, updateContact } from '../crm.js';
 import { subscribe } from '../events.js';
 import { clip, randomKey, STATUSES, isEmail } from '../util.js';
 
@@ -12,12 +13,16 @@ const LEAD_COLUMNS = `
   l.*,
   u.name AS assigned_name,
   s.name AS site_name,
-  s.sla_minutes AS sla_minutes
+  s.sla_minutes AS sla_minutes,
+  co.name AS company_name,
+  ct.name AS contact_name
 `;
 const LEAD_FROM = `
   FROM leads l
   LEFT JOIN users u ON u.id = l.assigned_to
   LEFT JOIN sites s ON s.id = l.site_id
+  LEFT JOIN companies co ON co.id = l.company_id
+  LEFT JOIN contacts ct ON ct.id = l.contact_id
 `;
 
 function buildFilters(url, user) {
@@ -48,6 +53,12 @@ function buildFilters(url, user) {
   if (site) {
     where.push('l.site_id = ?');
     args.push(Number(site));
+  }
+
+  const company = url.searchParams.get('company');
+  if (company) {
+    where.push('l.company_id = ?');
+    args.push(Number(company));
   }
 
   const q = clip(url.searchParams.get('q'), 80);
@@ -331,6 +342,154 @@ export async function handleApi(req, res, url) {
   if (p === '/api/stats' && req.method === 'GET') {
     json(res, 200, { ok: true, stats: stats() });
     return true;
+  }
+
+  /* ---------- компании ---------- */
+
+  if (p === '/api/companies' && req.method === 'GET') {
+    const q = clip(url.searchParams.get('q'), 80);
+    const where = [];
+    const args = [];
+    if (q) {
+      where.push('(c.name LIKE ? OR c.bin LIKE ? OR c.phone LIKE ?)');
+      args.push(`%${q}%`, `%${q}%`, `%${q}%`);
+    }
+    const sql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+    const limit = Math.min(Number(url.searchParams.get('limit') || 100), 500);
+
+    const items = db
+      .prepare(
+        `SELECT c.*, u.name AS assigned_name,
+                (SELECT COUNT(*) FROM contacts ct WHERE ct.company_id = c.id) AS contacts_count,
+                (SELECT COUNT(*) FROM leads l WHERE l.company_id = c.id) AS leads_count,
+                (SELECT MAX(l.created_at) FROM leads l WHERE l.company_id = c.id) AS last_lead_at
+           FROM companies c
+           LEFT JOIN users u ON u.id = c.assigned_to
+           ${sql}
+          ORDER BY last_lead_at DESC, c.id DESC LIMIT ?`,
+      )
+      .all(...args, limit);
+    const total = db.prepare(`SELECT COUNT(*) AS c FROM companies c ${sql}`).get(...args).c;
+    json(res, 200, { ok: true, items, total });
+    return true;
+  }
+
+  if (p === '/api/companies' && req.method === 'POST') {
+    const body = await readInput(req);
+    try {
+      const existing = findCompany({ name: body.name, bin: body.bin });
+      if (existing) {
+        json(res, 409, { ok: false, message: `Такая компания уже есть: ${existing.name}`, id: existing.id });
+        return true;
+      }
+      json(res, 201, { ok: true, company: createCompany(body) });
+    } catch (e) {
+      json(res, e.status || 500, { ok: false, message: e.message });
+    }
+    return true;
+  }
+
+  const companyMatch = p.match(/^\/api\/companies\/(\d+)$/);
+  if (companyMatch) {
+    const id = Number(companyMatch[1]);
+    if (req.method === 'GET') {
+      const company = db
+        .prepare('SELECT c.*, u.name AS assigned_name FROM companies c LEFT JOIN users u ON u.id = c.assigned_to WHERE c.id = ?')
+        .get(id);
+      if (!company) {
+        json(res, 404, { ok: false, error: 'not_found' });
+        return true;
+      }
+      const contacts = db.prepare('SELECT * FROM contacts WHERE company_id = ? ORDER BY id').all(id);
+      const leads = db
+        .prepare(`SELECT ${LEAD_COLUMNS} ${LEAD_FROM} WHERE l.company_id = ? ORDER BY l.created_at DESC LIMIT 100`)
+        .all(id);
+      json(res, 200, { ok: true, company, contacts, leads });
+      return true;
+    }
+    if (req.method === 'PATCH' || req.method === 'PUT') {
+      const body = await readInput(req);
+      try {
+        const company = updateCompany(id, body);
+        if (!company) {
+          json(res, 404, { ok: false, error: 'not_found' });
+          return true;
+        }
+        json(res, 200, { ok: true, company });
+      } catch (e) {
+        json(res, e.status || 500, { ok: false, message: e.message });
+      }
+      return true;
+    }
+    if (req.method === 'DELETE') {
+      if (!isAdmin) return denyNonAdmin();
+      db.prepare('DELETE FROM companies WHERE id = ?').run(id);
+      json(res, 200, { ok: true });
+      return true;
+    }
+  }
+
+  /* ---------- контакты ---------- */
+
+  if (p === '/api/contacts' && req.method === 'GET') {
+    const q = clip(url.searchParams.get('q'), 80);
+    const companyId = url.searchParams.get('company');
+    const where = [];
+    const args = [];
+    if (companyId) {
+      where.push('ct.company_id = ?');
+      args.push(Number(companyId));
+    }
+    if (q) {
+      where.push('(ct.name LIKE ? OR ct.phone_norm LIKE ? OR ct.email LIKE ?)');
+      args.push(`%${q}%`, `%${q.replace(/\D+/g, '')}%`, `%${q}%`);
+    }
+    const sql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+    const items = db
+      .prepare(
+        `SELECT ct.*, c.name AS company_name,
+                (SELECT COUNT(*) FROM leads l WHERE l.contact_id = ct.id) AS leads_count
+           FROM contacts ct LEFT JOIN companies c ON c.id = ct.company_id
+           ${sql} ORDER BY ct.id DESC LIMIT 200`,
+      )
+      .all(...args);
+    json(res, 200, { ok: true, items });
+    return true;
+  }
+
+  if (p === '/api/contacts' && req.method === 'POST') {
+    const body = await readInput(req);
+    try {
+      json(res, 201, { ok: true, contact: createContact(body) });
+    } catch (e) {
+      json(res, e.status || 500, { ok: false, message: e.message });
+    }
+    return true;
+  }
+
+  const contactMatch = p.match(/^\/api\/contacts\/(\d+)$/);
+  if (contactMatch) {
+    const id = Number(contactMatch[1]);
+    if (req.method === 'PATCH' || req.method === 'PUT') {
+      const body = await readInput(req);
+      try {
+        const contact = updateContact(id, body);
+        if (!contact) {
+          json(res, 404, { ok: false, error: 'not_found' });
+          return true;
+        }
+        json(res, 200, { ok: true, contact });
+      } catch (e) {
+        json(res, e.status || 500, { ok: false, message: e.message });
+      }
+      return true;
+    }
+    if (req.method === 'DELETE') {
+      if (!isAdmin) return denyNonAdmin();
+      db.prepare('DELETE FROM contacts WHERE id = ?').run(id);
+      json(res, 200, { ok: true });
+      return true;
+    }
   }
 
   /* ---------- сотрудники ---------- */

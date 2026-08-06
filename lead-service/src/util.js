@@ -11,6 +11,28 @@ export function normalizePhone(raw) {
 
 export const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v || '').trim());
 
+/** БИН/ИИН — только цифры (12 знаков в Казахстане). */
+export const normalizeBin = (raw) => String(raw || '').replace(/\D+/g, '').slice(0, 12);
+
+const LEGAL_FORMS = new Set([
+  'тоо', 'жшс', 'ип', 'жк', 'ао', 'қб', 'оао', 'зао', 'ооо', 'тов', 'llp', 'llc', 'ltd', 'ao',
+]);
+
+/**
+ * Название организации -> ключ для склейки дублей.
+ * «ТОО "Такси Плюс"», «Такси плюс» и «такси  плюс» дают одно и то же.
+ * Разбираем на слова, а не режем регуляркой: \b в JS не дружит с кириллицей.
+ */
+export function normalizeCompany(raw) {
+  return String(raw || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter((word) => word && !LEGAL_FORMS.has(word))
+    .join(' ');
+}
+
 /** Обрезка строки до лимита — защита от мусора в базе. */
 export const clip = (v, max = 500) => String(v ?? '').trim().slice(0, max);
 

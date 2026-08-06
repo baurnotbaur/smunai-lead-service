@@ -104,16 +104,34 @@
     [/^\/leads$/, renderLeads],
     [/^\/board$/, renderBoard],
     [/^\/lead\/(\d+)$/, renderLead],
+    [/^\/companies$/, renderCompanies],
+    [/^\/company\/(\d+)$/, renderCompany],
     [/^\/stats$/, renderStats],
     [/^\/sites$/, renderSites],
     [/^\/team$/, renderTeam],
   ];
 
+  // карточка относится к разделу списка: /lead/7 -> «Все заявки», /company/3 -> «Компании»
+  const NAV_OF_CARD = { '/lead/': 'leads', '/company/': 'companies' };
+
   async function route() {
     const hash = location.hash.replace(/^#/, '') || '/leads';
-    const [path] = hash.split('?');
+    const [path, query] = hash.split('?');
+
+    // ссылки вида #/leads?company=3 сразу открывают отфильтрованный список
+    if (query) {
+      const params = new URLSearchParams(query);
+      for (const key of ['q', 'status', 'assigned', 'site', 'company', 'from', 'to']) {
+        if (params.has(key)) state.filters[key] = params.get(key);
+      }
+    }
+
     for (const link of document.querySelectorAll('[data-nav]')) {
-      link.classList.toggle('active', path.startsWith('/' + link.dataset.nav) || (link.dataset.nav === 'leads' && path.startsWith('/lead/')));
+      const card = Object.entries(NAV_OF_CARD).find(([prefix]) => path.startsWith(prefix));
+      link.classList.toggle(
+        'active',
+        card ? card[1] === link.dataset.nav : path === '/' + link.dataset.nav,
+      );
     }
     for (const [re, handler] of routes) {
       const m = path.match(re);
@@ -192,6 +210,11 @@
         </div>
       </div>
       ${filtersBar()}
+      ${data.items.length && state.filters.company ? `
+        <div class="row" style="margin-bottom:12px">
+          <span class="pill pill--new">Компания: ${esc(data.items[0].company_name || '#' + state.filters.company)}</span>
+          <button class="btn btn--sm" id="clearCompany">Показать все заявки</button>
+        </div>` : ''}
       <div class="card" style="padding:0;overflow-x:auto">
         ${data.items.length ? `
         <table class="table">
@@ -212,6 +235,11 @@
       tr.addEventListener('click', () => (location.hash = '#/lead/' + tr.dataset.id));
     });
     $('#addLead')?.addEventListener('click', manualLeadDialog);
+    $('#clearCompany')?.addEventListener('click', () => {
+      delete state.filters.company;
+      location.hash = '#/leads';
+      renderLeads();
+    });
     $('#more')?.addEventListener('click', async (e) => {
       e.target.disabled = true;
       const next = await api(`/leads?${q}&offset=${data.items.length}`);
@@ -303,6 +331,207 @@
     });
   }
 
+  /* ---------- компании: список ---------- */
+
+  async function renderCompanies() {
+    const q = state.companyQuery || '';
+    const { items, total } = await api('/companies?q=' + encodeURIComponent(q));
+
+    view.innerHTML = `
+      <div class="page-head">
+        <h1>Компании <span class="muted" style="font-weight:400">${total}</span></h1>
+        <button class="btn btn--primary btn--sm" id="addCompany">+ Компания</button>
+      </div>
+      <div class="filters">
+        <input type="search" id="cq" placeholder="Поиск: название, БИН, телефон" value="${esc(q)}">
+      </div>
+      <div class="card" style="padding:0;overflow-x:auto">
+        ${items.length ? `
+        <table class="table">
+          <thead><tr>
+            <th>Компания</th><th>БИН</th><th>Контакты</th><th>Заявки</th>
+            <th>Последняя заявка</th><th>Ответственный</th>
+          </tr></thead>
+          <tbody>
+            ${items.map((c) => `
+              <tr data-id="${c.id}">
+                <td><b>${esc(c.name)}</b>${c.phone ? `<br><span class="mono muted">${esc(c.phone)}</span>` : ''}</td>
+                <td class="mono nowrap">${esc(c.bin) || '—'}</td>
+                <td class="nowrap">${c.contacts_count}</td>
+                <td class="nowrap">${c.leads_count}</td>
+                <td class="nowrap">${c.last_lead_at ? fmtDate(c.last_lead_at) : '<span class="muted">—</span>'}</td>
+                <td class="nowrap">${esc(c.assigned_name || '—')}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>` : '<div class="empty">Компаний пока нет. Они заводятся сами, когда в заявке указана организация.</div>'}
+      </div>`;
+
+    const search = $('#cq');
+    search.addEventListener('input', () => {
+      clearTimeout(search._t);
+      search._t = setTimeout(() => {
+        state.companyQuery = search.value.trim();
+        renderCompanies().then(() => $('#cq')?.focus());
+      }, 350);
+    });
+    view.querySelectorAll('tr[data-id]').forEach((tr) => {
+      tr.addEventListener('click', () => (location.hash = '#/company/' + tr.dataset.id));
+    });
+    $('#addCompany').addEventListener('click', async () => {
+      const name = prompt('Название компании (ТОО «…» / ИП …):');
+      if (!name) return;
+      try {
+        const r = await api('/companies', { method: 'POST', body: { name } });
+        location.hash = '#/company/' + r.company.id;
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  }
+
+  /* ---------- компании: карточка ---------- */
+
+  async function renderCompany(id) {
+    const { company, contacts, leads } = await api('/companies/' + id);
+
+    view.innerHTML = `
+      <div class="page-head">
+        <div>
+          <a href="#/companies" class="muted">← К компаниям</a>
+          <h1 style="margin-top:6px">${esc(company.name)}</h1>
+        </div>
+        <div class="row">
+          ${company.phone ? `<a class="btn btn--primary btn--sm" href="tel:${esc(company.phone)}">Позвонить</a>` : ''}
+          <a class="btn btn--sm" href="#/leads?company=${company.id}">Заявки компании</a>
+        </div>
+      </div>
+
+      <div class="lead-grid">
+        <div class="grid">
+          <div class="card">
+            <h2 style="margin-bottom:12px">Контактные лица</h2>
+            ${contacts.length ? `
+            <table class="table">
+              <thead><tr><th>Имя</th><th>Должность</th><th>Телефон</th><th>Email</th><th></th></tr></thead>
+              <tbody>
+                ${contacts.map((c) => `
+                  <tr>
+                    <td>${esc(c.name) || '<span class="muted">без имени</span>'}</td>
+                    <td>${esc(c.position) || '<span class="muted">—</span>'}</td>
+                    <td class="mono nowrap">${c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>` : '—'}</td>
+                    <td class="mono">${esc(c.email) || '—'}</td>
+                    <td class="nowrap"><button class="btn btn--sm" data-edit-contact="${c.id}">Изменить</button></td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>` : '<div class="muted">Контактных лиц пока нет.</div>'}
+            <button class="btn btn--sm" style="margin-top:12px" id="addContact">+ Контактное лицо</button>
+          </div>
+
+          <div class="card">
+            <h2 style="margin-bottom:12px">Заявки компании <span class="muted" style="font-weight:400">${leads.length}</span></h2>
+            ${leads.length ? `
+            <table class="table">
+              <thead><tr><th>Когда</th><th>Кто</th><th>Статус</th><th>Ответственный</th></tr></thead>
+              <tbody>
+                ${leads.map((l) => `
+                  <tr data-lead="${l.id}">
+                    <td class="nowrap">${fmtDate(l.created_at)}</td>
+                    <td>${esc(l.name || l.phone)}</td>
+                    <td class="nowrap">${statusPill(l.status)}</td>
+                    <td class="nowrap">${esc(l.assigned_name || '—')}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>` : '<div class="muted">Заявок пока нет.</div>'}
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 style="margin-bottom:12px">Реквизиты</h2>
+          <label class="field"><span>Название</span><input id="cName" value="${esc(company.name)}"></label>
+          <label class="field"><span>БИН / ИИН</span><input id="cBin" value="${esc(company.bin)}" placeholder="12 цифр"></label>
+          <label class="field"><span>Телефон</span><input id="cPhone" value="${esc(company.phone)}"></label>
+          <label class="field"><span>Email</span><input id="cEmail" value="${esc(company.email)}"></label>
+          <label class="field"><span>Адрес</span><input id="cAddress" value="${esc(company.address)}"></label>
+          <label class="field">
+            <span>Ответственный</span>
+            <select id="cAssigned">
+              <option value="">— не назначен —</option>
+              ${state.users.filter((u) => u.active).map((u) => `<option value="${u.id}"${company.assigned_to === u.id ? ' selected' : ''}>${esc(u.name)}</option>`).join('')}
+            </select>
+          </label>
+          <label class="field"><span>Заметки</span><textarea id="cNote">${esc(company.note)}</textarea></label>
+          <button class="btn btn--primary" id="saveCompany" style="width:100%">Сохранить</button>
+          ${state.user.role === 'admin' ? '<button class="btn btn--danger btn--sm" id="delCompany" style="width:100%;margin-top:8px">Удалить компанию</button>' : ''}
+        </div>
+      </div>`;
+
+    view.querySelectorAll('tr[data-lead]').forEach((tr) => {
+      tr.addEventListener('click', () => (location.hash = '#/lead/' + tr.dataset.lead));
+    });
+
+    $('#saveCompany').addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      try {
+        await api('/companies/' + id, {
+          method: 'PATCH',
+          body: {
+            name: $('#cName').value,
+            bin: $('#cBin').value,
+            phone: $('#cPhone').value,
+            email: $('#cEmail').value,
+            address: $('#cAddress').value,
+            note: $('#cNote').value,
+            assigned_to: $('#cAssigned').value || null,
+          },
+        });
+        toast('Сохранено');
+        renderCompany(id);
+      } catch (err) {
+        toast(err.message, true);
+        e.target.disabled = false;
+      }
+    });
+
+    $('#addContact').addEventListener('click', async () => {
+      const name = prompt('Имя контактного лица:');
+      if (name === null) return;
+      const phone = prompt('Телефон:') || '';
+      const position = prompt('Должность (необязательно):') || '';
+      try {
+        await api('/contacts', { method: 'POST', body: { name, phone, position, company_id: id } });
+        toast('Контакт добавлен');
+        renderCompany(id);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+
+    view.querySelectorAll('[data-edit-contact]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const contact = contacts.find((c) => String(c.id) === btn.dataset.editContact);
+        const name = prompt('Имя:', contact.name);
+        if (name === null) return;
+        const phone = prompt('Телефон:', contact.phone);
+        if (phone === null) return;
+        const position = prompt('Должность:', contact.position);
+        if (position === null) return;
+        try {
+          await api('/contacts/' + contact.id, { method: 'PATCH', body: { name, phone, position } });
+          toast('Сохранено');
+          renderCompany(id);
+        } catch (err) {
+          toast(err.message, true);
+        }
+      });
+    });
+
+    $('#delCompany')?.addEventListener('click', async () => {
+      if (!confirm('Удалить компанию? Заявки и контакты останутся, но потеряют привязку.')) return;
+      await api('/companies/' + id, { method: 'DELETE' });
+      location.hash = '#/companies';
+    });
+  }
+
   /* ---------- заявки: карточка ---------- */
 
   async function renderLead(id) {
@@ -326,6 +555,10 @@
           <div class="card">
             <h2 style="margin-bottom:12px">Контакт и источник</h2>
             <dl class="kv">
+              <dt>Компания</dt><dd>${lead.company_id
+                ? `<a href="#/company/${lead.company_id}">${esc(lead.company_name)}</a>`
+                : '<span class="muted">не определена</span>'}</dd>
+              <dt>Контакт</dt><dd>${esc(lead.contact_name) || '<span class="muted">—</span>'}</dd>
               <dt>Телефон</dt><dd class="mono">${esc(lead.phone) || '—'}</dd>
               <dt>Email</dt><dd class="mono">${esc(lead.email) || '—'}</dd>
               <dt>Комментарий</dt><dd>${esc(lead.comment) || '—'}</dd>

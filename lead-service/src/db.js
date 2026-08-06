@@ -79,6 +79,41 @@ CREATE INDEX IF NOT EXISTS idx_leads_status   ON leads(status);
 CREATE INDEX IF NOT EXISTS idx_leads_assigned ON leads(assigned_to);
 CREATE INDEX IF NOT EXISTS idx_leads_phone    ON leads(phone_norm);
 
+-- Клиент-организация: ТОО, ИП, таксопарк. К ней привязываются заявки и контакты.
+CREATE TABLE IF NOT EXISTS companies (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL,
+  name_norm   TEXT NOT NULL DEFAULT '',            -- имя без «ТОО»/кавычек: склейка дублей
+  bin         TEXT NOT NULL DEFAULT '',            -- БИН / ИИН
+  phone       TEXT NOT NULL DEFAULT '',
+  email       TEXT NOT NULL DEFAULT '',
+  address     TEXT NOT NULL DEFAULT '',
+  note        TEXT NOT NULL DEFAULT '',
+  assigned_to INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_companies_norm ON companies(name_norm);
+CREATE INDEX IF NOT EXISTS idx_companies_bin  ON companies(bin);
+
+-- Контактное лицо: директор, бухгалтер, логист. Узнаётся по телефону.
+CREATE TABLE IF NOT EXISTS contacts (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+  name       TEXT NOT NULL DEFAULT '',
+  phone      TEXT NOT NULL DEFAULT '',
+  phone_norm TEXT NOT NULL DEFAULT '',
+  email      TEXT NOT NULL DEFAULT '',
+  position   TEXT NOT NULL DEFAULT '',
+  note       TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_phone   ON contacts(phone_norm);
+CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company_id);
+
 -- История: смены статуса, назначения, комментарии
 CREATE TABLE IF NOT EXISTS lead_events (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,6 +125,22 @@ CREATE TABLE IF NOT EXISTS lead_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_lead ON lead_events(lead_id, id);
+`);
+
+// --- миграции ---------------------------------------------------------------
+
+/** Добавляет колонку, если её ещё нет: база могла создаваться прошлой версией. */
+function addColumn(table, column, definition) {
+  const exists = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+  if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+addColumn('leads', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE SET NULL');
+addColumn('leads', 'contact_id', 'INTEGER REFERENCES contacts(id) ON DELETE SET NULL');
+
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_leads_company ON leads(company_id);
+  CREATE INDEX IF NOT EXISTS idx_leads_contact ON leads(contact_id);
 `);
 
 // --- первичное наполнение ---------------------------------------------------

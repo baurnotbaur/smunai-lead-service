@@ -2,6 +2,7 @@ import { db } from './db.js';
 import { clip, normalizePhone, isEmail, STATUSES } from './util.js';
 import { notifyNewLead } from './notify.js';
 import { broadcast } from './events.js';
+import { linkLeadParties } from './crm.js';
 
 const DUPLICATE_WINDOW_MIN = 30;
 
@@ -46,6 +47,7 @@ const KNOWN_FIELDS = new Set([
   'key', 'site_key', 'name', 'phone', 'email', 'comment', 'message', 'form_id', 'form',
   'page_url', 'url', 'referrer', 'ref', 'utm_source', 'utm_medium', 'utm_campaign',
   'utm_content', 'utm_term', 'utm', '_hp', 'consent',
+  'company', 'org', 'organization', 'bin', 'iin',
 ]);
 
 /**
@@ -91,14 +93,24 @@ export function createLead(input, meta) {
 
   const manager = site?.auto_assign ? pickManager() : null;
 
+  // узнаём клиента: тот же телефон — тот же контакт, та же организация — та же компания
+  const { companyId, contactId } = linkLeadParties({
+    name,
+    phone: phoneRaw,
+    email,
+    company: input.company ?? input.org ?? input.organization,
+    bin: input.bin ?? input.iin,
+  });
+
   const info = db
     .prepare(
       `INSERT INTO leads (
          site_id, name, phone, phone_norm, email, comment, extra, assigned_to,
+         company_id, contact_id,
          form_id, page_url, referrer,
          utm_source, utm_medium, utm_campaign, utm_content, utm_term,
          ip, user_agent, is_duplicate
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       site?.id ?? null,
@@ -109,6 +121,8 @@ export function createLead(input, meta) {
       comment,
       JSON.stringify(extra),
       manager?.id ?? null,
+      companyId,
+      contactId,
       clip(input.form_id ?? input.form, 60),
       clip(input.page_url ?? input.url, 500),
       clip(input.referrer ?? input.ref, 500),
@@ -197,6 +211,28 @@ export function updateLead(id, patch, user) {
   if ('lost_reason' in patch) {
     sets.push('lost_reason = ?');
     vals.push(clip(patch.lost_reason, 300));
+  }
+
+  if ('company_id' in patch) {
+    const next = patch.company_id ? Number(patch.company_id) : null;
+    if (next !== lead.company_id) {
+      const target = next ? db.prepare('SELECT name FROM companies WHERE id = ?').get(next) : null;
+      if (next && !target) throw Object.assign(new Error('bad_company'), { status: 400 });
+      sets.push('company_id = ?');
+      vals.push(next);
+      events.push(['field', target ? `Компания: ${target.name}` : 'Компания отвязана']);
+    }
+  }
+
+  if ('contact_id' in patch) {
+    const next = patch.contact_id ? Number(patch.contact_id) : null;
+    if (next !== lead.contact_id) {
+      const target = next ? db.prepare('SELECT name, phone FROM contacts WHERE id = ?').get(next) : null;
+      if (next && !target) throw Object.assign(new Error('bad_contact'), { status: 400 });
+      sets.push('contact_id = ?');
+      vals.push(next);
+      events.push(['field', target ? `Контакт: ${target.name || target.phone}` : 'Контакт отвязан']);
+    }
   }
 
   if (!sets.length) return lead;
