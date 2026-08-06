@@ -101,6 +101,7 @@ export function createLead(input, meta) {
     email,
     company: input.company ?? input.org ?? input.organization,
     bin: input.bin ?? input.iin,
+    consent: input.consent ?? input.marketing_consent,
   });
 
   const info = db

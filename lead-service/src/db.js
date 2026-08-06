@@ -107,8 +107,22 @@ CREATE TABLE IF NOT EXISTS contacts (
   email      TEXT NOT NULL DEFAULT '',
   position   TEXT NOT NULL DEFAULT '',
   note       TEXT NOT NULL DEFAULT '',
+  -- согласие на рекламу: без него рассылка и выгрузка в рекламные кабинеты незаконны
+  marketing_consent INTEGER NOT NULL DEFAULT 0,
+  consent_at        TEXT,
+  consent_source    TEXT NOT NULL DEFAULT '',
+  unsubscribed      INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Сегмент: сохранённая выборка клиентов для рассылки или рекламной аудитории.
+CREATE TABLE IF NOT EXISTS segments (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT NOT NULL,
+  filters    TEXT NOT NULL DEFAULT '{}',        -- JSON: те же условия, что в списке заявок
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_contacts_phone   ON contacts(phone_norm);
@@ -169,6 +183,11 @@ function addColumn(table, column, definition) {
 
 addColumn('leads', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE SET NULL');
 addColumn('leads', 'contact_id', 'INTEGER REFERENCES contacts(id) ON DELETE SET NULL');
+
+addColumn('contacts', 'marketing_consent', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('contacts', 'consent_at', 'TEXT');
+addColumn('contacts', 'consent_source', "TEXT NOT NULL DEFAULT ''");
+addColumn('contacts', 'unsubscribed', 'INTEGER NOT NULL DEFAULT 0');
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_leads_company ON leads(company_id);

@@ -7,6 +7,10 @@ import {
 import { updateLead } from '../leads.js';
 import { findCompany, createCompany, updateCompany, createContact, updateContact } from '../crm.js';
 import { listTasks, taskCounts, createTask, updateTask, deleteTask } from '../tasks.js';
+import {
+  listSegments, getSegment, createSegment, updateSegment, deleteSegment,
+  audience, audienceStats, audienceCsv, audiencePreviewCsv,
+} from '../marketing.js';
 import { subscribe } from '../events.js';
 import { clip, randomKey, isEmail } from '../util.js';
 import {
@@ -367,6 +371,102 @@ export async function handleApi(req, res, url) {
 
   if (p === '/api/stats' && req.method === 'GET') {
     json(res, 200, { ok: true, stats: stats() });
+    return true;
+  }
+
+  /* ---------- маркетинг: сегменты и аудитории ---------- */
+
+  if (p === '/api/segments' && req.method === 'GET') {
+    const items = listSegments().map((s) => {
+      const filters = JSON.parse(s.filters || '{}');
+      return { ...s, filters, stats: audienceStats(filters) };
+    });
+    json(res, 200, { ok: true, items });
+    return true;
+  }
+
+  if (p === '/api/segments' && req.method === 'POST') {
+    const body = await readInput(req);
+    try {
+      json(res, 201, { ok: true, segment: createSegment(body, user) });
+    } catch (e) {
+      json(res, e.status || 500, { ok: false, message: e.message });
+    }
+    return true;
+  }
+
+  // размер выборки до сохранения — чтобы видеть, кого зацепит
+  if (p === '/api/segments/preview' && req.method === 'POST') {
+    const body = await readInput(req);
+    const filters = body.filters || {};
+    json(res, 200, {
+      ok: true,
+      stats: audienceStats(filters),
+      sample: audience(filters, { consentOnly: false, limit: 10 }),
+    });
+    return true;
+  }
+
+  const segmentMatch = p.match(/^\/api\/segments\/(\d+)$/);
+  if (segmentMatch) {
+    const id = Number(segmentMatch[1]);
+    if (req.method === 'GET') {
+      const segment = getSegment(id);
+      if (!segment) {
+        json(res, 404, { ok: false, error: 'not_found' });
+        return true;
+      }
+      const filters = JSON.parse(segment.filters || '{}');
+      json(res, 200, {
+        ok: true,
+        segment: { ...segment, filters },
+        stats: audienceStats(filters),
+        sample: audience(filters, { consentOnly: false, limit: 50 }),
+      });
+      return true;
+    }
+    if (req.method === 'PATCH' || req.method === 'PUT') {
+      const body = await readInput(req);
+      try {
+        const segment = updateSegment(id, body);
+        if (!segment) {
+          json(res, 404, { ok: false, error: 'not_found' });
+          return true;
+        }
+        json(res, 200, { ok: true, segment });
+      } catch (e) {
+        json(res, e.status || 500, { ok: false, message: e.message });
+      }
+      return true;
+    }
+    if (req.method === 'DELETE') {
+      deleteSegment(id);
+      json(res, 200, { ok: true });
+      return true;
+    }
+  }
+
+  const audienceMatch = p.match(/^\/api\/segments\/(\d+)\/audience\.csv$/);
+  if (audienceMatch && req.method === 'GET') {
+    const segment = getSegment(Number(audienceMatch[1]));
+    if (!segment) {
+      json(res, 404, { ok: false, error: 'not_found' });
+      return true;
+    }
+    const filters = JSON.parse(segment.filters || '{}');
+    const format = url.searchParams.get('format') || 'meta';
+    // выгружаем без согласия только по явному требованию — ответственность на владельце базы
+    const consentOnly = url.searchParams.get('all') !== '1';
+    const rows = audience(filters, { consentOnly });
+    const preview = format === 'preview';
+    const body = preview ? audiencePreviewCsv(rows) : audienceCsv(rows, format);
+
+    res.writeHead(200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="audience-${format}-${segment.id}.csv"`,
+      'Cache-Control': 'no-store',
+    });
+    res.end(body);
     return true;
   }
 

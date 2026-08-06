@@ -108,6 +108,7 @@
     [/^\/lead\/(\d+)$/, renderLead],
     [/^\/tasks$/, renderTasks],
     [/^\/stages$/, renderStages],
+    [/^\/marketing$/, renderMarketing],
     [/^\/companies$/, renderCompanies],
     [/^\/company\/(\d+)$/, renderCompany],
     [/^\/stats$/, renderStats],
@@ -536,7 +537,7 @@
             <h2 style="margin-bottom:12px">Контактные лица</h2>
             ${contacts.length ? `
             <table class="table">
-              <thead><tr><th>Имя</th><th>Должность</th><th>Телефон</th><th>Email</th><th></th></tr></thead>
+              <thead><tr><th>Имя</th><th>Должность</th><th>Телефон</th><th>Email</th><th>Реклама</th><th></th></tr></thead>
               <tbody>
                 ${contacts.map((c) => `
                   <tr>
@@ -544,6 +545,16 @@
                     <td>${esc(c.position) || '<span class="muted">—</span>'}</td>
                     <td class="mono nowrap">${c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>` : '—'}</td>
                     <td class="mono">${esc(c.email) || '—'}</td>
+                    <td class="nowrap">
+                      ${c.unsubscribed
+                        ? '<span class="pill pill--lost">отписан</span>'
+                        : c.marketing_consent
+                          ? `<span class="pill pill--won">согласие</span>`
+                          : '<span class="muted" style="font-size:12px">нет</span>'}
+                      <button class="btn btn--sm" data-consent="${c.id}" style="margin-left:6px">
+                        ${c.marketing_consent ? 'Снять' : 'Отметить'}
+                      </button>
+                    </td>
                     <td class="nowrap"><button class="btn btn--sm" data-edit-contact="${c.id}">Изменить</button></td>
                   </tr>`).join('')}
               </tbody>
@@ -628,6 +639,20 @@
       } catch (err) {
         toast(err.message, true);
       }
+    });
+
+    view.querySelectorAll('[data-consent]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const contact = contacts.find((c) => String(c.id) === btn.dataset.consent);
+        const next = !contact.marketing_consent;
+        if (next && !confirm(`Клиент ${contact.name || contact.phone} действительно дал согласие на рекламные рассылки?`)) return;
+        await api('/contacts/' + contact.id, {
+          method: 'PATCH',
+          body: { marketing_consent: next, consent_source: 'вручную, менеджер' },
+        });
+        toast(next ? 'Согласие отмечено' : 'Согласие снято');
+        renderCompany(id);
+      });
     });
 
     view.querySelectorAll('[data-edit-contact]').forEach((btn) => {
@@ -908,6 +933,152 @@
             </div>`).join('')}
         </div>
       </div>`;
+  }
+
+  /* ---------- маркетинг: сегменты и аудитории ---------- */
+
+  /** Условия сегмента человеческим языком — чтобы в списке было видно, кого он ловит. */
+  function describeFilters(f) {
+    const parts = [];
+    if (f.stages) parts.push('стадии: ' + f.stages.split(',').map(stageTitle).join(', '));
+    if (f.days_ago) parts.push(`заявка за последние ${f.days_ago} дн.`);
+    if (f.older_than_days) parts.push(`заявка старше ${f.older_than_days} дн.`);
+    if (f.assigned) parts.push('менеджер: ' + (state.users.find((u) => u.id === f.assigned)?.name || f.assigned));
+    if (f.site) parts.push('сайт: ' + (state.sites.find((s) => s.id === f.site)?.name || f.site));
+    if (f.has_company) parts.push('только с компанией');
+    if (f.q) parts.push(`поиск «${f.q}»`);
+    return parts.length ? parts.join(' · ') : 'вся база контактов';
+  }
+
+  function segmentFormHtml(f = {}) {
+    return `
+      <div class="grid" style="gap:10px">
+        <label class="field" style="margin:0">
+          <span>Стадии заявок (можно несколько)</span>
+          <select id="sgStages" multiple size="5">
+            ${stageList().map((s) => `<option value="${s.code}"${(f.stages || '').split(',').includes(s.code) ? ' selected' : ''}>${esc(s.title)}</option>`).join('')}
+          </select>
+        </label>
+        <div class="row row--wrap" style="gap:10px">
+          <label class="field" style="margin:0;flex:1 1 160px">
+            <span>Заявка за последние, дней</span>
+            <input type="number" id="sgDays" min="1" value="${f.days_ago || ''}" placeholder="напр. 90">
+          </label>
+          <label class="field" style="margin:0;flex:1 1 160px">
+            <span>Заявка старше, дней</span>
+            <input type="number" id="sgOlder" min="1" value="${f.older_than_days || ''}" placeholder="напр. 30">
+          </label>
+        </div>
+        <label class="field" style="margin:0">
+          <span>Менеджер</span>
+          <select id="sgAssigned">
+            <option value="">— любой —</option>
+            ${state.users.filter((u) => u.active).map((u) => `<option value="${u.id}"${f.assigned === u.id ? ' selected' : ''}>${esc(u.name)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="row" style="gap:8px;align-items:center">
+          <input type="checkbox" id="sgHasCompany" style="width:auto"${f.has_company ? ' checked' : ''}>
+          <span>Только те, у кого определена компания</span>
+        </label>
+      </div>`;
+  }
+
+  function readSegmentForm() {
+    return {
+      stages: Array.from($('#sgStages').selectedOptions).map((o) => o.value).join(','),
+      days_ago: $('#sgDays').value,
+      older_than_days: $('#sgOlder').value,
+      assigned: $('#sgAssigned').value,
+      has_company: $('#sgHasCompany').checked ? 1 : 0,
+    };
+  }
+
+  async function renderMarketing() {
+    const { items } = await api('/segments');
+
+    view.innerHTML = `
+      <div class="page-head">
+        <div>
+          <h1>Маркетинг</h1>
+          <p class="muted" style="margin:6px 0 0">Сегменты клиентской базы и выгрузка аудиторий для Instagram и TikTok.</p>
+        </div>
+        <button class="btn btn--primary btn--sm" id="addSegment">+ Сегмент</button>
+      </div>
+
+      <div id="segmentEditor" hidden class="card" style="margin-bottom:16px">
+        <h2 style="margin-bottom:12px">Новый сегмент</h2>
+        <label class="field"><span>Название</span><input id="sgName" placeholder="Например: отказы старше 30 дней"></label>
+        ${segmentFormHtml()}
+        <div class="row" style="margin-top:14px;gap:8px">
+          <button class="btn btn--primary btn--sm" id="saveSegment">Сохранить</button>
+          <button class="btn btn--sm" id="previewSegment">Посчитать</button>
+          <button class="btn btn--sm btn--ghost" id="cancelSegment">Отмена</button>
+          <span class="muted" id="sgPreview"></span>
+        </div>
+      </div>
+
+      ${items.length ? items.map((s) => `
+        <div class="card" style="margin-bottom:12px">
+          <div class="spread">
+            <div>
+              <h3>${esc(s.name)}</h3>
+              <div class="muted" style="font-size:13px;margin-top:4px">${esc(describeFilters(s.filters))}</div>
+            </div>
+            <button class="btn btn--sm btn--danger" data-del-seg="${s.id}">Удалить</button>
+          </div>
+          <div class="row row--wrap" style="gap:18px;margin-top:12px">
+            <div><div style="font-size:20px;font-weight:600">${s.stats.total}</div><div class="muted" style="font-size:12px">контактов всего</div></div>
+            <div><div style="font-size:20px;font-weight:600;color:var(--green)">${s.stats.consented}</div><div class="muted" style="font-size:12px">с согласием на рекламу</div></div>
+            <div><div style="font-size:20px;font-weight:600">${s.stats.withPhone}</div><div class="muted" style="font-size:12px">с телефоном</div></div>
+            <div><div style="font-size:20px;font-weight:600">${s.stats.withEmail}</div><div class="muted" style="font-size:12px">с почтой</div></div>
+          </div>
+          <div class="row row--wrap" style="gap:8px;margin-top:14px">
+            <a class="btn btn--sm" href="/api/segments/${s.id}/audience.csv?format=meta">Аудитория для Instagram (Meta)</a>
+            <a class="btn btn--sm" href="/api/segments/${s.id}/audience.csv?format=tiktok">Аудитория для TikTok</a>
+            <a class="btn btn--sm btn--ghost" href="/api/segments/${s.id}/audience.csv?format=preview">Посмотреть список</a>
+          </div>
+          ${s.stats.consented === 0 ? '<p class="muted" style="margin:10px 0 0;font-size:13px;color:var(--amber)">Никто в сегменте не дал согласия на рекламу — выгрузка будет пустой.</p>' : ''}
+        </div>`).join('') : '<div class="empty">Сегментов нет. Создайте первый — например «успешные сделки за полгода» для look-alike аудитории.</div>'}
+
+      <div class="card" style="margin-top:16px">
+        <h2 style="margin-bottom:10px">Как загрузить аудиторию</h2>
+        <ol class="muted" style="margin:0;padding-left:20px;font-size:13px;line-height:1.9">
+          <li><b>Instagram:</b> Meta Ads Manager → Аудитории → Создать аудиторию → Индивидуальная → Список клиентов → загрузить файл.</li>
+          <li><b>TikTok:</b> TikTok Ads Manager → Ассеты → Аудитории → Загрузить файл → тип «Хешированные данные».</li>
+          <li>Телефоны и почты выгружаются уже захешированными (SHA-256) — сырые контакты наружу не уходят, это требование обеих площадок.</li>
+          <li>В выгрузку попадают только те, кто дал согласие на рекламу. Согласие ставится галочкой в форме на сайте или вручную в карточке компании.</li>
+        </ol>
+      </div>`;
+
+    const editor = $('#segmentEditor');
+    $('#addSegment').addEventListener('click', () => {
+      editor.hidden = !editor.hidden;
+      if (!editor.hidden) $('#sgName').focus();
+    });
+    $('#cancelSegment').addEventListener('click', () => (editor.hidden = true));
+
+    $('#previewSegment').addEventListener('click', async () => {
+      const { stats } = await api('/segments/preview', { method: 'POST', body: { filters: readSegmentForm() } });
+      $('#sgPreview').textContent = `${stats.total} контактов, из них с согласием ${stats.consented}`;
+    });
+
+    $('#saveSegment').addEventListener('click', async () => {
+      try {
+        await api('/segments', { method: 'POST', body: { name: $('#sgName').value, filters: readSegmentForm() } });
+        toast('Сегмент сохранён');
+        renderMarketing();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+
+    view.querySelectorAll('[data-del-seg]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Удалить сегмент?')) return;
+        await api('/segments/' + btn.dataset.delSeg, { method: 'DELETE' });
+        renderMarketing();
+      });
+    });
   }
 
   /* ---------- воронка: настройка ---------- */

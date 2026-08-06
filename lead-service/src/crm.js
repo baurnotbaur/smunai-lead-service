@@ -1,5 +1,5 @@
 import { db } from './db.js';
-import { clip, normalizePhone, normalizeCompany, normalizeBin } from './util.js';
+import { clip, normalizePhone, normalizeCompany, normalizeBin, truthy, nowIso } from './util.js';
 
 /* ---------- компании ---------- */
 
@@ -99,10 +99,12 @@ export function createContact(input) {
     throw Object.assign(new Error('Нужно имя, телефон или email'), { status: 400 });
   }
 
+  const consent = truthy(input.marketing_consent ?? input.consent);
   const info = db
     .prepare(
-      `INSERT INTO contacts (company_id, name, phone, phone_norm, email, position, note)
-       VALUES (?,?,?,?,?,?,?)`,
+      `INSERT INTO contacts (company_id, name, phone, phone_norm, email, position, note,
+                             marketing_consent, consent_at, consent_source)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       input.company_id ? Number(input.company_id) : null,
@@ -112,6 +114,9 @@ export function createContact(input) {
       email,
       clip(input.position, 120),
       clip(input.note, 2000),
+      consent ? 1 : 0,
+      consent ? nowIso() : null,
+      consent ? clip(input.consent_source, 60) || 'форма на сайте' : '',
     );
   return db.prepare('SELECT * FROM contacts WHERE id = ?').get(Number(info.lastInsertRowid));
 }
@@ -138,6 +143,17 @@ export function updateContact(id, patch) {
   if (patch.note != null) put('note', clip(patch.note, 2000));
   if ('company_id' in patch) put('company_id', patch.company_id ? Number(patch.company_id) : null);
 
+  if ('marketing_consent' in patch) {
+    const consent = truthy(patch.marketing_consent);
+    put('marketing_consent', consent ? 1 : 0);
+    // дату согласия ставим один раз — она доказательство, что оно было получено
+    if (consent && !contact.marketing_consent) {
+      put('consent_at', nowIso());
+      put('consent_source', clip(patch.consent_source, 60) || 'вручную');
+    }
+  }
+  if ('unsubscribed' in patch) put('unsubscribed', truthy(patch.unsubscribed) ? 1 : 0);
+
   if (!sets.length) return contact;
   sets.push("updated_at = datetime('now')");
   db.prepare(`UPDATE contacts SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
@@ -149,7 +165,7 @@ export function updateContact(id, patch) {
  * Клиента узнаём по телефону, организацию — по названию или БИН.
  * @returns {{companyId: number|null, contactId: number|null}}
  */
-export function linkLeadParties({ name, phone, email, company, bin }) {
+export function linkLeadParties({ name, phone, email, company, bin, consent }) {
   const org = ensureCompany({ name: company, bin, phone, email });
 
   let contact = findContactByPhone(phone);
@@ -159,9 +175,14 @@ export function linkLeadParties({ name, phone, email, company, bin }) {
     if (!contact.name && name) patch.name = name;
     if (!contact.email && email) patch.email = email;
     if (!contact.company_id && org) patch.company_id = org.id;
+    // согласие только подтверждаем: снять его может лишь сам человек
+    if (truthy(consent) && !contact.marketing_consent) {
+      patch.marketing_consent = true;
+      patch.consent_source = 'форма на сайте';
+    }
     if (Object.keys(patch).length) contact = updateContact(contact.id, patch);
   } else if (normalizePhone(phone).length >= 10 || name || email) {
-    contact = createContact({ name, phone, email, company_id: org?.id ?? null });
+    contact = createContact({ name, phone, email, company_id: org?.id ?? null, consent });
   }
 
   return { companyId: org?.id ?? null, contactId: contact?.id ?? null };

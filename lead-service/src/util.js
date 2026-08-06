@@ -38,6 +38,9 @@ export const clip = (v, max = 500) => String(v ?? '').trim().slice(0, max);
 
 export const nowIso = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
+/** Галочка из формы: '1', 'true', 'on', 'yes' и настоящий true — согласие. */
+export const truthy = (v) => v === true || /^(1|true|yes|on|da|да)$/i.test(String(v ?? '').trim());
+
 // Стадии воронки больше не константа — они настраиваются и живут в таблице stages.
 // См. src/stages.js: listStages(), stageTitles(), codesOfKind().
 
