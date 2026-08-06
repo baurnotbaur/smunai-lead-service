@@ -114,6 +114,25 @@ CREATE TABLE IF NOT EXISTS contacts (
 CREATE INDEX IF NOT EXISTS idx_contacts_phone   ON contacts(phone_norm);
 CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company_id);
 
+-- Дело: «перезвонить», «отправить КП». Держит менеджера в графике.
+CREATE TABLE IF NOT EXISTS tasks (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id     INTEGER REFERENCES leads(id) ON DELETE CASCADE,
+  company_id  INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'call',        -- call | meeting | email | other
+  due_at      TEXT NOT NULL,                       -- срок, локальное время в формате БД
+  assigned_to INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  done        INTEGER NOT NULL DEFAULT 0,
+  done_at     TEXT,
+  created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_due      ON tasks(done, due_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_to, done);
+CREATE INDEX IF NOT EXISTS idx_tasks_lead     ON tasks(lead_id);
+
 -- История: смены статуса, назначения, комментарии
 CREATE TABLE IF NOT EXISTS lead_events (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

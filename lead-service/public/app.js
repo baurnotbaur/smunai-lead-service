@@ -104,6 +104,7 @@
     [/^\/leads$/, renderLeads],
     [/^\/board$/, renderBoard],
     [/^\/lead\/(\d+)$/, renderLead],
+    [/^\/tasks$/, renderTasks],
     [/^\/companies$/, renderCompanies],
     [/^\/company\/(\d+)$/, renderCompany],
     [/^\/stats$/, renderStats],
@@ -112,7 +113,7 @@
   ];
 
   // карточка относится к разделу списка: /lead/7 -> «Все заявки», /company/3 -> «Компании»
-  const NAV_OF_CARD = { '/lead/': 'leads', '/company/': 'companies' };
+  const NAV_OF_CARD = { '/lead/': 'leads', '/company/': 'companies', '/tasks': 'tasks' };
 
   async function route() {
     const hash = location.hash.replace(/^#/, '') || '/leads';
@@ -331,6 +332,126 @@
     });
   }
 
+  /* ---------- дела ---------- */
+
+  const TASK_KINDS = { call: 'Звонок', meeting: 'Встреча', email: 'Письмо', other: 'Дело' };
+
+  /** Срок в формате БД -> значение для <input type="datetime-local">. */
+  const toInputDate = (d) => {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const inHours = (h) => toInputDate(new Date(Date.now() + h * 3600_000));
+
+  function tomorrowAt(hour) {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(hour, 0, 0, 0);
+    return toInputDate(d);
+  }
+
+  const isTaskOverdue = (t) => !t.done && parseDate(t.due_at) < Date.now();
+
+  function taskRow(task, { showLead = true } = {}) {
+    const lead = task.lead_id
+      ? `<a href="#/lead/${task.lead_id}">${esc(task.lead_name || task.lead_phone || '№' + task.lead_id)}</a>`
+      : task.company_id
+        ? `<a href="#/company/${task.company_id}">${esc(task.company_name)}</a>`
+        : '<span class="muted">—</span>';
+
+    return `
+      <tr data-task="${task.id}"${task.done ? ' style="opacity:.55"' : ''}>
+        <td style="width:32px"><input type="checkbox" data-done="${task.id}"${task.done ? ' checked' : ''} style="width:auto"></td>
+        <td>
+          <b${task.done ? ' style="text-decoration:line-through"' : ''}>${esc(task.title)}</b>
+          <br><span class="muted" style="font-size:12px">${TASK_KINDS[task.kind] || task.kind}</span>
+        </td>
+        <td class="nowrap">
+          ${fmtDate(task.due_at)}
+          ${isTaskOverdue(task) ? '<br><span class="pill pill--overdue">просрочено</span>' : ''}
+        </td>
+        ${showLead ? `<td>${lead}</td>` : ''}
+        <td class="nowrap">${esc(task.assigned_name || '—')}</td>
+        <td class="nowrap"><button class="btn btn--sm btn--danger" data-del-task="${task.id}">Удалить</button></td>
+      </tr>`;
+  }
+
+  /** Вешает обработчики «выполнено» и «удалить» на любой список дел. */
+  function bindTaskRows(reload) {
+    view.querySelectorAll('[data-done]').forEach((box) => {
+      box.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          await api('/tasks/' + box.dataset.done, { method: 'PATCH', body: { done: box.checked } });
+          toast(box.checked ? 'Дело выполнено' : 'Дело возвращено в работу');
+          reload();
+        } catch (err) {
+          toast(err.message, true);
+          box.checked = !box.checked;
+        }
+      });
+    });
+    view.querySelectorAll('[data-del-task]').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm('Удалить дело?')) return;
+        await api('/tasks/' + btn.dataset.delTask, { method: 'DELETE' });
+        reload();
+      });
+    });
+  }
+
+  async function renderTasks() {
+    const scope = state.taskScope || 'me';
+    const filter = state.taskFilter || 'week';
+    const { items } = await api(`/tasks?scope=${scope}&filter=${filter}`);
+
+    const overdue = items.filter(isTaskOverdue);
+    const today = items.filter((t) => !isTaskOverdue(t) && new Date(parseDate(t.due_at)).toDateString() === new Date().toDateString());
+    const later = items.filter((t) => !overdue.includes(t) && !today.includes(t));
+
+    const group = (title, list, cls = '') => list.length ? `
+      <h2 style="margin:22px 0 10px" class="${cls}">${title} <span class="muted" style="font-weight:400">${list.length}</span></h2>
+      <div class="card" style="padding:0;overflow-x:auto">
+        <table class="table">
+          <thead><tr><th></th><th>Что сделать</th><th>Срок</th><th>По заявке</th><th>Ответственный</th><th></th></tr></thead>
+          <tbody>${list.map((t) => taskRow(t)).join('')}</tbody>
+        </table>
+      </div>` : '';
+
+    view.innerHTML = `
+      <div class="page-head">
+        <h1>Дела</h1>
+      </div>
+      <div class="filters">
+        <select id="tScope">
+          <option value="me"${scope === 'me' ? ' selected' : ''}>Мои дела</option>
+          <option value="all"${scope === 'all' ? ' selected' : ''}>Все дела</option>
+        </select>
+        <select id="tFilter">
+          <option value="today"${filter === 'today' ? ' selected' : ''}>На сегодня</option>
+          <option value="week"${filter === 'week' ? ' selected' : ''}>На неделю</option>
+          <option value="overdue"${filter === 'overdue' ? ' selected' : ''}>Только просроченные</option>
+          <option value=""${filter === '' ? ' selected' : ''}>Все открытые</option>
+        </select>
+      </div>
+      ${items.length ? '' : '<div class="empty">Дел нет. Добавляйте их из карточки заявки — «Перезвонить», «Отправить КП».</div>'}
+      ${group('Просрочено', overdue)}
+      ${group('Сегодня', today)}
+      ${group('Дальше', later)}`;
+
+    $('#tScope').addEventListener('change', (e) => {
+      state.taskScope = e.target.value;
+      renderTasks();
+    });
+    $('#tFilter').addEventListener('change', (e) => {
+      state.taskFilter = e.target.value;
+      renderTasks();
+    });
+    bindTaskRows(renderTasks);
+  }
+
   /* ---------- компании: список ---------- */
 
   async function renderCompanies() {
@@ -535,8 +656,9 @@
   /* ---------- заявки: карточка ---------- */
 
   async function renderLead(id) {
-    const { lead, events } = await api('/leads/' + id);
+    const [{ lead, events }, tasksRes] = await Promise.all([api('/leads/' + id), api('/tasks?lead=' + id)]);
     const extra = JSON.parse(lead.extra || '{}');
+    const tasks = tasksRes.items;
 
     view.innerHTML = `
       <div class="page-head">
@@ -571,6 +693,31 @@
               <dt>IP</dt><dd class="mono">${esc(lead.ip) || '—'}</dd>
               ${Object.entries(extra).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}
             </dl>
+          </div>
+
+          <div class="card">
+            <h2 style="margin-bottom:12px">Дела</h2>
+            <form id="taskForm" class="row row--wrap" style="gap:8px;margin-bottom:14px">
+              <input name="title" placeholder="Что сделать: перезвонить, отправить КП…" required style="flex:1 1 240px">
+              <select name="kind" style="width:auto">
+                ${Object.entries(TASK_KINDS).map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}
+              </select>
+              <input type="datetime-local" name="due_at" value="${inHours(1)}" required style="width:auto">
+              <button class="btn btn--primary btn--sm" type="submit">Добавить</button>
+            </form>
+            <div class="row row--wrap" style="gap:6px;margin-bottom:14px">
+              <span class="muted" style="font-size:12px">Быстрый срок:</span>
+              <button class="btn btn--sm" data-due="${inHours(1)}">через час</button>
+              <button class="btn btn--sm" data-due="${tomorrowAt(10)}">завтра 10:00</button>
+              <button class="btn btn--sm" data-due="${inHours(72)}">через 3 дня</button>
+            </div>
+            ${tasks.length ? `
+            <div style="overflow-x:auto">
+              <table class="table">
+                <thead><tr><th></th><th>Что сделать</th><th>Срок</th><th>Ответственный</th><th></th></tr></thead>
+                <tbody>${tasks.map((t) => taskRow(t, { showLead: false })).join('')}</tbody>
+              </table>
+            </div>` : '<div class="muted">Дел по заявке нет.</div>'}
           </div>
 
           <div class="card">
@@ -651,6 +798,34 @@
         toast(err.message, true);
       }
     });
+
+    const taskForm = $('#taskForm');
+    taskForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(taskForm);
+      try {
+        await api('/tasks', {
+          method: 'POST',
+          body: {
+            lead_id: id,
+            title: fd.get('title'),
+            kind: fd.get('kind'),
+            due_at: fd.get('due_at'),
+          },
+        });
+        toast('Дело добавлено');
+        renderLead(id);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+    view.querySelectorAll('[data-due]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        taskForm.elements.due_at.value = btn.dataset.due;
+        taskForm.elements.title.focus();
+      });
+    });
+    bindTaskRows(() => renderLead(id));
 
     $('#delLead')?.addEventListener('click', async () => {
       if (!confirm('Удалить заявку безвозвратно?')) return;
@@ -936,12 +1111,20 @@
   async function refreshBadge() {
     if (!state.user) return;
     try {
-      const { stats } = await api('/stats');
+      const [{ stats }, tasks] = await Promise.all([api('/stats'), api('/tasks?scope=me&filter=today')]);
+
       const badge = $('#navNew');
       const count = stats.counts.new;
       badge.hidden = !count;
       badge.textContent = count;
       badge.classList.toggle('badge-count--warn', stats.overdue > 0);
+
+      // в бейдже дел — то, что горит сегодня или уже просрочено
+      const due = tasks.counts.overdue + tasks.counts.today;
+      const taskBadge = $('#navTasks');
+      taskBadge.hidden = !due;
+      taskBadge.textContent = due;
+      taskBadge.classList.toggle('badge-count--warn', tasks.counts.overdue > 0);
     } catch {}
   }
 
@@ -980,6 +1163,14 @@
       // свои же изменения панель уже отрисовала — второй перерисовки не нужно
       if (by === state.user.id) return;
       liveRefresh(id);
+    });
+
+    es.addEventListener('task:change', (e) => {
+      const { lead_id } = JSON.parse(e.data);
+      refreshBadge();
+      const path = currentPath();
+      const affected = path === '/tasks' || (lead_id != null && path === '/lead/' + lead_id);
+      if (affected && safeToRefresh()) route();
     });
 
     // обрыв связи EventSource лечит сам; после 401 он закрывается — пробуем позже,

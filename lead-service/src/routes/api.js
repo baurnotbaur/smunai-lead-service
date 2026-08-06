@@ -6,6 +6,7 @@ import {
 } from '../auth.js';
 import { updateLead } from '../leads.js';
 import { findCompany, createCompany, updateCompany, createContact, updateContact } from '../crm.js';
+import { listTasks, taskCounts, createTask, updateTask, deleteTask } from '../tasks.js';
 import { subscribe } from '../events.js';
 import { clip, randomKey, STATUSES, isEmail } from '../util.js';
 
@@ -342,6 +343,56 @@ export async function handleApi(req, res, url) {
   if (p === '/api/stats' && req.method === 'GET') {
     json(res, 200, { ok: true, stats: stats() });
     return true;
+  }
+
+  /* ---------- дела ---------- */
+
+  if (p === '/api/tasks' && req.method === 'GET') {
+    json(res, 200, {
+      ok: true,
+      items: listTasks({
+        scope: url.searchParams.get('scope'),
+        filter: url.searchParams.get('filter'),
+        leadId: url.searchParams.get('lead'),
+        userId: user.id,
+      }),
+      counts: taskCounts(user.id),
+    });
+    return true;
+  }
+
+  if (p === '/api/tasks' && req.method === 'POST') {
+    const body = await readInput(req);
+    try {
+      json(res, 201, { ok: true, task: createTask(body, user) });
+    } catch (e) {
+      json(res, e.status || 500, { ok: false, message: e.message });
+    }
+    return true;
+  }
+
+  const taskMatch = p.match(/^\/api\/tasks\/(\d+)$/);
+  if (taskMatch) {
+    const id = Number(taskMatch[1]);
+    if (req.method === 'PATCH' || req.method === 'PUT') {
+      const body = await readInput(req);
+      try {
+        const task = updateTask(id, body, user);
+        if (!task) {
+          json(res, 404, { ok: false, error: 'not_found' });
+          return true;
+        }
+        json(res, 200, { ok: true, task });
+      } catch (e) {
+        json(res, e.status || 500, { ok: false, message: e.message });
+      }
+      return true;
+    }
+    if (req.method === 'DELETE') {
+      deleteTask(id);
+      json(res, 200, { ok: true });
+      return true;
+    }
   }
 
   /* ---------- компании ---------- */
