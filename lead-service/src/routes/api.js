@@ -8,7 +8,11 @@ import { updateLead } from '../leads.js';
 import { findCompany, createCompany, updateCompany, createContact, updateContact } from '../crm.js';
 import { listTasks, taskCounts, createTask, updateTask, deleteTask } from '../tasks.js';
 import { subscribe } from '../events.js';
-import { clip, randomKey, STATUSES, isEmail } from '../util.js';
+import { clip, randomKey, isEmail } from '../util.js';
+import {
+  listStages, codesOfKind, inClause, stageTitles,
+  createStage, updateStage, deleteStage, reorderStages,
+} from '../stages.js';
 
 const LEAD_COLUMNS = `
   l.*,
@@ -32,7 +36,8 @@ function buildFilters(url, user) {
 
   const status = url.searchParams.get('status');
   if (status && status !== 'all') {
-    const list = status.split(',').filter((s) => STATUSES[s]);
+    const known = new Set(listStages().map((s) => s.code));
+    const list = status.split(',').filter((s) => known.has(s));
     if (list.length) {
       where.push(`l.status IN (${list.map(() => '?').join(',')})`);
       args.push(...list);
@@ -82,7 +87,12 @@ function buildFilters(url, user) {
   }
 
   if (url.searchParams.get('overdue') === '1') {
-    where.push("l.status = 'new' AND l.created_at < datetime('now', '-' || COALESCE(s.sla_minutes, 15) || ' minutes')");
+    const open = inClause(codesOfKind('open'));
+    where.push(
+      `l.first_touch_at IS NULL AND l.status IN (${open.sql})
+       AND l.created_at < datetime('now', '-' || COALESCE(s.sla_minutes, 15) || ' minutes')`,
+    );
+    args.push(...open.args);
   }
 
   return { sql: where.length ? 'WHERE ' + where.join(' AND ') : '', args };
@@ -102,8 +112,13 @@ function listLeads(url, user) {
 }
 
 function stats() {
+  const stages = listStages();
+  const won = inClause(codesOfKind('won'));
+  const lost = inClause(codesOfKind('lost'));
+  const open = inClause(codesOfKind('open'));
+
   const byStatus = db.prepare('SELECT status, COUNT(*) AS c FROM leads GROUP BY status').all();
-  const counts = Object.fromEntries(Object.keys(STATUSES).map((k) => [k, 0]));
+  const counts = Object.fromEntries(stages.map((s) => [s.code, 0]));
   for (const r of byStatus) counts[r.status] = r.c;
 
   const period = (expr) => db.prepare(`SELECT COUNT(*) AS c FROM leads WHERE created_at > datetime('now', ?)`).get(expr).c;
@@ -115,50 +130,59 @@ function stats() {
     )
     .get();
 
+  // просрочка SLA: до заявки ещё не дотронулись, а срок первого контакта вышел
   const overdue = db
     .prepare(
       `SELECT COUNT(*) AS c FROM leads l LEFT JOIN sites s ON s.id = l.site_id
-        WHERE l.status = 'new'
+        WHERE l.first_touch_at IS NULL
+          AND l.status IN (${open.sql})
           AND l.created_at < datetime('now', '-' || COALESCE(s.sla_minutes, 15) || ' minutes')`,
     )
-    .get().c;
+    .get(...open.args).c;
 
   const bySource = db
     .prepare(
       `SELECT CASE WHEN utm_source = '' THEN 'прямой заход' ELSE utm_source END AS source,
               COUNT(*) AS total,
-              SUM(status = 'won') AS won
+              SUM(status IN (${won.sql})) AS won
          FROM leads WHERE created_at > datetime('now','-30 days')
         GROUP BY source ORDER BY total DESC LIMIT 10`,
     )
-    .all();
+    .all(...won.args);
 
   const byManager = db
     .prepare(
       `SELECT u.id, u.name,
               COUNT(l.id) AS total,
-              SUM(l.status = 'won') AS won,
-              SUM(l.status IN ('new','in_work','callback')) AS open
+              SUM(l.status IN (${won.sql})) AS won,
+              SUM(l.status IN (${open.sql})) AS open
          FROM users u LEFT JOIN leads l
            ON l.assigned_to = u.id AND l.created_at > datetime('now','-30 days')
         WHERE u.active = 1
         GROUP BY u.id ORDER BY total DESC`,
     )
-    .all();
+    .all(...won.args, ...open.args);
 
   const revenue = db
-    .prepare("SELECT COALESCE(SUM(amount), 0) AS sum FROM leads WHERE status = 'won' AND closed_at > datetime('now','-30 days')")
-    .get().sum;
+    .prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS sum FROM leads
+        WHERE status IN (${won.sql}) AND closed_at > datetime('now','-30 days')`,
+    )
+    .get(...won.args).sum;
 
-  const closed = counts.won + counts.lost;
+  const sum = (codes) => codes.reduce((acc, code) => acc + (counts[code] || 0), 0);
+  const wonCount = sum(won.args);
+  const closed = wonCount + sum(lost.args);
+
   return {
     counts,
+    stages,
     total: Object.values(counts).reduce((a, b) => a + b, 0),
     today: period('-1 day'),
     week: period('-7 days'),
     month: period('-30 days'),
     avgResponseMinutes: responseRow.avg_min ? Math.round(responseRow.avg_min * 10) / 10 : null,
-    conversion: closed ? Math.round((counts.won / closed) * 1000) / 10 : null,
+    conversion: closed ? Math.round((wonCount / closed) * 1000) / 10 : null,
     overdue,
     revenue,
     bySource,
@@ -167,6 +191,7 @@ function stats() {
 }
 
 function toCsv(rows) {
+  const STATUSES = stageTitles();
   const head = [
     'ID', 'Дата', 'Имя', 'Телефон', 'Email', 'Комментарий', 'Статус',
     'Ответственный', 'Сайт', 'Источник', 'Кампания', 'Страница', 'Сумма',
@@ -343,6 +368,67 @@ export async function handleApi(req, res, url) {
   if (p === '/api/stats' && req.method === 'GET') {
     json(res, 200, { ok: true, stats: stats() });
     return true;
+  }
+
+  /* ---------- воронка ---------- */
+
+  if (p === '/api/stages' && req.method === 'GET') {
+    const counts = Object.fromEntries(
+      db.prepare('SELECT status, COUNT(*) AS c FROM leads GROUP BY status').all().map((r) => [r.status, r.c]),
+    );
+    json(res, 200, { ok: true, items: listStages().map((s) => ({ ...s, leads_count: counts[s.code] || 0 })) });
+    return true;
+  }
+
+  if (p === '/api/stages' && req.method === 'POST') {
+    if (!isAdmin) return denyNonAdmin();
+    const body = await readInput(req);
+    try {
+      json(res, 201, { ok: true, stage: createStage(body) });
+    } catch (e) {
+      json(res, e.status || 500, { ok: false, message: e.message });
+    }
+    return true;
+  }
+
+  if (p === '/api/stages/reorder' && req.method === 'POST') {
+    if (!isAdmin) return denyNonAdmin();
+    const body = await readInput(req);
+    json(res, 200, { ok: true, items: reorderStages(body.ids || []) });
+    return true;
+  }
+
+  const stageMatch = p.match(/^\/api\/stages\/(\d+)$/);
+  if (stageMatch) {
+    if (!isAdmin) return denyNonAdmin();
+    const id = Number(stageMatch[1]);
+    if (req.method === 'PATCH' || req.method === 'PUT') {
+      const body = await readInput(req);
+      try {
+        const stage = updateStage(id, body);
+        if (!stage) {
+          json(res, 404, { ok: false, error: 'not_found' });
+          return true;
+        }
+        json(res, 200, { ok: true, stage });
+      } catch (e) {
+        json(res, e.status || 500, { ok: false, message: e.message });
+      }
+      return true;
+    }
+    if (req.method === 'DELETE') {
+      try {
+        const result = deleteStage(id, url.searchParams.get('move_to'));
+        if (!result) {
+          json(res, 404, { ok: false, error: 'not_found' });
+          return true;
+        }
+        json(res, 200, { ok: true, ...result });
+      } catch (e) {
+        json(res, e.status || 500, { ok: false, message: e.message });
+      }
+      return true;
+    }
   }
 
   /* ---------- дела ---------- */

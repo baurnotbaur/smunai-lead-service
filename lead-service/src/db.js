@@ -114,6 +114,19 @@ CREATE TABLE IF NOT EXISTS contacts (
 CREATE INDEX IF NOT EXISTS idx_contacts_phone   ON contacts(phone_norm);
 CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company_id);
 
+-- Стадия воронки. leads.status хранит code — этапы можно менять под свой процесс.
+CREATE TABLE IF NOT EXISTS stages (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  code   TEXT NOT NULL UNIQUE,
+  title  TEXT NOT NULL,
+  kind   TEXT NOT NULL DEFAULT 'open',        -- open | won | lost: смысл для аналитики
+  color  TEXT NOT NULL DEFAULT 'new',         -- палитра пилюли: new|in_work|callback|won|lost
+  sort   INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_stages_sort ON stages(sort);
+
 -- Дело: «перезвонить», «отправить КП». Держит менеджера в графике.
 CREATE TABLE IF NOT EXISTS tasks (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,6 +186,19 @@ if (userCount === 0) {
     'admin',
   );
   console.log(`[init] создан администратор: ${config.adminEmail} / ${config.adminPassword}`);
+}
+
+// стартовая воронка повторяет прежние статусы — старые заявки остаются валидными
+const stageCount = db.prepare('SELECT COUNT(*) AS c FROM stages').get().c;
+if (stageCount === 0) {
+  const insert = db.prepare('INSERT INTO stages (code, title, kind, color, sort) VALUES (?,?,?,?,?)');
+  [
+    ['new', 'Новая', 'open', 'new'],
+    ['in_work', 'В работе', 'open', 'in_work'],
+    ['callback', 'Перезвонить', 'open', 'callback'],
+    ['won', 'Успех', 'won', 'won'],
+    ['lost', 'Отказ', 'lost', 'lost'],
+  ].forEach(([code, title, kind, color], i) => insert.run(code, title, kind, color, (i + 1) * 10));
 }
 
 const siteCount = db.prepare('SELECT COUNT(*) AS c FROM sites').get().c;

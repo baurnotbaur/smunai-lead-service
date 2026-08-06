@@ -2,17 +2,19 @@
 (function () {
   'use strict';
 
-  const STATUSES = {
-    new: 'Новая',
-    in_work: 'В работе',
-    callback: 'Перезвонить',
-    won: 'Успех',
-    lost: 'Отказ',
-  };
-
   const $ = (sel, root = document) => root.querySelector(sel);
   const view = $('#view');
-  const state = { user: null, users: [], sites: [], filters: {} };
+  const state = { user: null, users: [], sites: [], stages: [], filters: {} };
+
+  /* ---------- стадии воронки ---------- */
+  // Настраиваются в разделе «Воронка», поэтому берутся с сервера, а не из константы.
+
+  const stageList = () => state.stages;
+  const stageOf = (code) => state.stages.find((s) => s.code === code);
+  const stageTitle = (code) => stageOf(code)?.title || code;
+  const isWonStage = (code) => stageOf(code)?.kind === 'won';
+  const isLostStage = (code) => stageOf(code)?.kind === 'lost';
+  const isOpenStage = (code) => stageOf(code)?.kind === 'open';
 
   /* ---------- утилиты ---------- */
 
@@ -41,7 +43,7 @@
   const isOverdue = (lead) =>
     lead.status === 'new' && (Date.now() - parseDate(lead.created_at)) / 60000 > (lead.sla_minutes || 15);
 
-  const statusPill = (s) => `<span class="pill pill--${s}">${STATUSES[s] || s}</span>`;
+  const statusPill = (s) => `<span class="pill pill--${stageOf(s)?.color || 'new'}">${esc(stageTitle(s))}</span>`;
 
   function toast(msg, isError) {
     const el = $('#toast');
@@ -105,6 +107,7 @@
     [/^\/board$/, renderBoard],
     [/^\/lead\/(\d+)$/, renderLead],
     [/^\/tasks$/, renderTasks],
+    [/^\/stages$/, renderStages],
     [/^\/companies$/, renderCompanies],
     [/^\/company\/(\d+)$/, renderCompany],
     [/^\/stats$/, renderStats],
@@ -162,7 +165,7 @@
     return `
       <div class="filters">
         <input type="search" id="fq" placeholder="Поиск: имя, телефон, email" value="${esc(f.q || '')}">
-        <select id="fstatus">${opts(Object.entries(STATUSES).map(([v, t]) => ({ v, t })), f.status, 'Все статусы')}</select>
+        <select id="fstatus">${opts(stageList().map((s) => ({ v: s.code, t: s.title })), f.status, 'Все стадии')}</select>
         <select id="fassigned">
           <option value="">Все ответственные</option>
           <option value="me"${f.assigned === 'me' ? ' selected' : ''}>Мои</option>
@@ -277,11 +280,11 @@
 
   async function renderBoard() {
     const data = await api('/leads?limit=300&' + filterQuery());
-    const cols = Object.entries(STATUSES).map(([key, title]) => {
-      const items = data.items.filter((l) => l.status === key);
+    const cols = stageList().map((stage) => {
+      const items = data.items.filter((l) => l.status === stage.code);
       return `
-        <div class="board__col" data-status="${key}">
-          <div class="board__head"><span>${title}</span><span class="muted">${items.length}</span></div>
+        <div class="board__col" data-status="${stage.code}">
+          <div class="board__head"><span>${esc(stage.title)}</span><span class="muted">${items.length}</span></div>
           ${items.map((l) => `
             <div class="board__card" draggable="true" data-id="${l.id}">
               <b>${esc(l.name || 'Без имени')}</b>
@@ -295,7 +298,7 @@
     }).join('');
 
     view.innerHTML = `
-      <div class="page-head"><h1>Доска</h1><span class="muted">Перетащите карточку, чтобы сменить статус</span></div>
+      <div class="page-head"><h1>Доска</h1><span class="muted">Перетащите карточку, чтобы сменить стадию</span></div>
       ${filtersBar()}
       <div class="board">${cols}</div>`;
 
@@ -739,9 +742,9 @@
         <div class="card">
           <h2 style="margin-bottom:12px">Работа с заявкой</h2>
           <label class="field">
-            <span>Статус</span>
+            <span>Стадия</span>
             <select id="setStatus">
-              ${Object.entries(STATUSES).map(([v, t]) => `<option value="${v}"${lead.status === v ? ' selected' : ''}>${t}</option>`).join('')}
+              ${stageList().map((s) => `<option value="${s.code}"${lead.status === s.code ? ' selected' : ''}>${esc(s.title)}</option>`).join('')}
             </select>
           </label>
           <label class="field">
@@ -755,7 +758,7 @@
             <span>Сумма сделки</span>
             <input type="number" id="setAmount" step="0.01" value="${lead.amount ?? ''}" placeholder="0">
           </label>
-          <label class="field" id="lostWrap"${lead.status === 'lost' ? '' : ' hidden'}>
+          <label class="field" id="lostWrap"${isLostStage(lead.status) ? '' : ' hidden'}>
             <span>Причина отказа</span>
             <input type="text" id="setLost" value="${esc(lead.lost_reason)}" placeholder="Дорого, выбрали конкурента…">
           </label>
@@ -765,7 +768,7 @@
       </div>`;
 
     $('#setStatus').addEventListener('change', (e) => {
-      $('#lostWrap').hidden = e.target.value !== 'lost';
+      $('#lostWrap').hidden = !isLostStage(e.target.value);
     });
 
     $('#saveLead').addEventListener('click', async (e) => {
@@ -898,13 +901,134 @@
       <div class="card" style="margin-top:14px">
         <h2 style="margin-bottom:12px">Воронка</h2>
         <div class="row row--wrap">
-          ${Object.entries(STATUSES).map(([k, t]) => `
+          ${stageList().map((s) => `
             <div style="min-width:120px">
-              <div style="font-size:22px;font-weight:600">${stats.counts[k]}</div>
-              <div>${statusPill(k)}</div>
+              <div style="font-size:22px;font-weight:600">${stats.counts[s.code] || 0}</div>
+              <div>${statusPill(s.code)}</div>
             </div>`).join('')}
         </div>
       </div>`;
+  }
+
+  /* ---------- воронка: настройка ---------- */
+
+  const STAGE_KINDS = { open: 'В работе', won: 'Успешное завершение', lost: 'Отказ' };
+  const STAGE_COLORS = { new: 'синий', in_work: 'жёлтый', callback: 'фиолетовый', won: 'зелёный', lost: 'серый' };
+
+  async function renderStages() {
+    const { items } = await api('/stages');
+    state.stages = items;
+    const admin = state.user.role === 'admin';
+
+    view.innerHTML = `
+      <div class="page-head">
+        <div>
+          <h1>Воронка</h1>
+          <p class="muted" style="margin:6px 0 0">Этапы, по которым заявка идёт до договора. Порядок = колонки на доске.</p>
+        </div>
+        ${admin ? '<button class="btn btn--primary btn--sm" id="addStage">+ Стадия</button>' : ''}
+      </div>
+
+      <div class="card" style="padding:0;overflow-x:auto">
+        <table class="table">
+          <thead><tr><th></th><th>Название</th><th>Тип</th><th>Цвет</th><th>Заявок</th><th></th></tr></thead>
+          <tbody>
+            ${items.map((s, i) => `
+              <tr>
+                <td class="nowrap">
+                  ${admin ? `
+                    <button class="btn btn--sm" data-up="${s.id}"${i === 0 ? ' disabled' : ''}>↑</button>
+                    <button class="btn btn--sm" data-down="${s.id}"${i === items.length - 1 ? ' disabled' : ''}>↓</button>` : ''}
+                </td>
+                <td>${statusPill(s.code)}</td>
+                <td>${STAGE_KINDS[s.kind]}</td>
+                <td class="muted">${STAGE_COLORS[s.color] || s.color}</td>
+                <td class="mono">${s.leads_count ?? ''}</td>
+                <td class="nowrap">
+                  ${admin ? `
+                    <button class="btn btn--sm" data-edit="${s.id}">Изменить</button>
+                    <button class="btn btn--sm btn--danger" data-del="${s.id}">Удалить</button>` : ''}
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <p class="muted" style="margin-top:12px;font-size:13px">
+        Тип «Успешное завершение» и «Отказ» нужны аналитике: по ним считается конверсия и выручка.
+      </p>`;
+
+    if (!admin) return;
+
+    const move = async (id, delta) => {
+      const ids = items.map((s) => s.id);
+      const i = ids.indexOf(Number(id));
+      const j = i + delta;
+      if (j < 0 || j >= ids.length) return;
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+      await api('/stages/reorder', { method: 'POST', body: { ids } });
+      renderStages();
+    };
+    view.querySelectorAll('[data-up]').forEach((b) => b.addEventListener('click', () => move(b.dataset.up, -1)));
+    view.querySelectorAll('[data-down]').forEach((b) => b.addEventListener('click', () => move(b.dataset.down, 1)));
+
+    $('#addStage')?.addEventListener('click', async () => {
+      const title = prompt('Название стадии (например: КП отправлено):');
+      if (!title) return;
+      const kind = prompt('Тип: open — в работе, won — успех, lost — отказ', 'open');
+      if (kind === null) return;
+      try {
+        await api('/stages', { method: 'POST', body: { title, kind } });
+        toast('Стадия добавлена');
+        renderStages();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+
+    view.querySelectorAll('[data-edit]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const stage = items.find((s) => String(s.id) === btn.dataset.edit);
+        const title = prompt('Название стадии:', stage.title);
+        if (title === null) return;
+        const kind = prompt('Тип: open / won / lost', stage.kind);
+        if (kind === null) return;
+        const color = prompt('Цвет: new, in_work, callback, won, lost', stage.color);
+        if (color === null) return;
+        try {
+          await api('/stages/' + stage.id, { method: 'PATCH', body: { title, kind, color } });
+          toast('Сохранено');
+          renderStages();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      });
+    });
+
+    view.querySelectorAll('[data-del]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const stage = items.find((s) => String(s.id) === btn.dataset.del);
+        if (!confirm(`Удалить стадию «${stage.title}»?`)) return;
+        try {
+          await api('/stages/' + stage.id, { method: 'DELETE' });
+          toast('Стадия удалена');
+          renderStages();
+        } catch (err) {
+          // в стадии есть заявки — спрашиваем, куда их перенести
+          if (!/перенести/.test(err.message)) return toast(err.message, true);
+          const others = items.filter((s) => s.id !== stage.id);
+          const target = prompt(
+            `${err.message}\n\nКуда перенести? Впишите название:\n` + others.map((s) => '• ' + s.title).join('\n'),
+            others[0].title,
+          );
+          if (!target) return;
+          const match = others.find((s) => s.title.toLowerCase() === target.trim().toLowerCase());
+          if (!match) return toast('Такой стадии нет', true);
+          await api(`/stages/${stage.id}?move_to=${encodeURIComponent(match.code)}`, { method: 'DELETE' });
+          toast('Стадия удалена, заявки перенесены');
+          renderStages();
+        }
+      });
+    });
   }
 
   /* ---------- подключение сайта ---------- */
@@ -1187,9 +1311,10 @@
   }
 
   async function boot() {
-    const [users, sites] = await Promise.all([api('/users'), api('/sites')]);
+    const [users, sites, stages] = await Promise.all([api('/users'), api('/sites'), api('/stages')]);
     state.users = users.items;
     state.sites = sites.items;
+    state.stages = stages.items;
 
     $('#loginScreen').hidden = true;
     $('#app').hidden = false;

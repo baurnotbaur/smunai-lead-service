@@ -1,5 +1,6 @@
 import { db } from './db.js';
-import { clip, normalizePhone, isEmail, STATUSES } from './util.js';
+import { clip, normalizePhone, isEmail } from './util.js';
+import { stageByCode, stageTitles, startCode } from './stages.js';
 import { notifyNewLead } from './notify.js';
 import { broadcast } from './events.js';
 import { linkLeadParties } from './crm.js';
@@ -106,11 +107,11 @@ export function createLead(input, meta) {
     .prepare(
       `INSERT INTO leads (
          site_id, name, phone, phone_norm, email, comment, extra, assigned_to,
-         company_id, contact_id,
+         company_id, contact_id, status,
          form_id, page_url, referrer,
          utm_source, utm_medium, utm_campaign, utm_content, utm_term,
          ip, user_agent, is_duplicate
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       site?.id ?? null,
@@ -123,6 +124,7 @@ export function createLead(input, meta) {
       manager?.id ?? null,
       companyId,
       contactId,
+      startCode(),
       clip(input.form_id ?? input.form, 60),
       clip(input.page_url ?? input.url, 500),
       clip(input.referrer ?? input.ref, 500),
@@ -172,15 +174,18 @@ export function updateLead(id, patch, user) {
   const events = [];
 
   if (patch.status && patch.status !== lead.status) {
-    if (!STATUSES[patch.status]) throw Object.assign(new Error('bad_status'), { status: 400 });
+    const stage = stageByCode(patch.status);
+    if (!stage) throw Object.assign(new Error('bad_status'), { status: 400 });
+    const titles = stageTitles();
     sets.push('status = ?');
-    vals.push(patch.status);
-    events.push(['status', `Статус: ${STATUSES[lead.status]} → ${STATUSES[patch.status]}`]);
+    vals.push(stage.code);
+    events.push(['status', `Стадия: ${titles[lead.status] || lead.status} → ${stage.title}`]);
 
-    if (!lead.first_touch_at && patch.status !== 'new') {
+    // уход с первой стадии = менеджер взял заявку в работу
+    if (!lead.first_touch_at && stage.code !== startCode()) {
       sets.push("first_touch_at = datetime('now')");
     }
-    if (patch.status === 'won' || patch.status === 'lost') {
+    if (stage.kind === 'won' || stage.kind === 'lost') {
       sets.push("closed_at = datetime('now')");
     } else {
       sets.push('closed_at = NULL');

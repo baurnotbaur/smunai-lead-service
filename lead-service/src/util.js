@@ -38,15 +38,8 @@ export const clip = (v, max = 500) => String(v ?? '').trim().slice(0, max);
 
 export const nowIso = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
-export const STATUSES = {
-  new: 'Новая',
-  in_work: 'В работе',
-  callback: 'Перезвонить',
-  won: 'Успех',
-  lost: 'Отказ',
-};
-
-export const isOpenStatus = (s) => s === 'new' || s === 'in_work' || s === 'callback';
+// Стадии воронки больше не константа — они настраиваются и живут в таблице stages.
+// См. src/stages.js: listStages(), stageTitles(), codesOfKind().
 
 /** Простой лимитер в памяти: не больше `limit` событий на ключ за `windowMs`. */
 export function createRateLimiter({ limit, windowMs }) {
