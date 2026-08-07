@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Сервис приёма и обработки заявок с сайта для отдела продаж",
   "engines": {
-    "node": ">=22.5.0"
+    "node": "24.x"
   },
   "scripts": {
     "start": "node server.js",

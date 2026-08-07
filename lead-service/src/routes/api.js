@@ -1,4 +1,5 @@
 import { db } from '../db.js';
+import { config } from '../config.js';
 import { json, readInput } from '../http.js';
 import {
   currentUser, createSession, sessionCookie, clearCookie,
@@ -230,7 +231,7 @@ export async function handleApi(req, res, url) {
     const s = await createSession(db, row.id);
     json(
       res, 200,
-      { ok: true, user: { id: row.id, name: row.name, email: row.email, role: row.role } },
+      { ok: true, user: { id: row.id, name: row.name, email: row.email, role: row.role }, live: !config.serverless },
       { 'Set-Cookie': sessionCookie(s.id, s.expires) },
     );
     return true;
@@ -269,12 +270,19 @@ export async function handleApi(req, res, url) {
   };
 
   if (p === '/api/me') {
-    json(res, 200, { ok: true, user });
+    // live=false — панель не станет открывать поток событий и обойдётся без живых обновлений
+    json(res, 200, { ok: true, user, live: !config.serverless });
     return true;
   }
 
   // поток живых обновлений: панель сама подтягивает новые заявки
   if (p === '/api/events' && req.method === 'GET') {
+    // в функции держать открытый поток нечем: она живёт один запрос и общей памяти между
+    // экземплярами нет, так что событие всё равно не дошло бы до чужой вкладки
+    if (config.serverless) {
+      json(res, 501, { ok: false, error: 'live_unavailable' });
+      return true;
+    }
     subscribe(req, res);
     return true;
   }

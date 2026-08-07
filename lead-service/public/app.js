@@ -4,7 +4,7 @@
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const view = $('#view');
-  const state = { user: null, users: [], sites: [], stages: [], filters: {} };
+  const state = { user: null, live: true, users: [], sites: [], stages: [], filters: {} };
 
   /* ---------- стадии воронки ---------- */
   // Настраиваются в разделе «Воронка», поэтому берутся с сервера, а не из константы.
@@ -87,6 +87,7 @@
     try {
       const r = await api('/auth/login', { method: 'POST', body: { email: fd.get('email'), password: fd.get('password') } });
       state.user = r.user;
+      state.live = r.live !== false;
       e.target.reset();
       await boot();
     } catch (err) {
@@ -1494,15 +1495,22 @@
 
     await route();
     refreshBadge();
-    connectEvents();
-    // страховка на случай, если поток событий оборвался незаметно
+
     clearInterval(boot._t);
-    boot._t = setInterval(refreshBadge, 60000);
+    if (state.live) {
+      connectEvents();
+      // страховка на случай, если поток событий оборвался незаметно
+      boot._t = setInterval(refreshBadge, 60000);
+    } else {
+      // живого потока нет (сервис работает в функции) — подтягиваем список сами
+      boot._t = setInterval(() => safeToRefresh() && liveRefresh(), 30000);
+    }
   }
 
   api('/me')
     .then((r) => {
       state.user = r.user;
+      state.live = r.live !== false;
       return boot();
     })
     .catch(showLogin);
