@@ -1,11 +1,33 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+/**
+ * Читает .env. Две вещи, которых не делает встроенный loadEnvFile:
+ * снимает BOM (иначе первая переменная в файле теряется — Windows дописывает его
+ * при сохранении) и не затирает то, что уже задано в окружении, — иначе пустое
+ * значение из файла перебивало бы переменную, переданную в командной строке.
+ */
+function loadEnv(file) {
+  for (const line of readFileSync(file, 'utf8').replace(/^﻿/, '').split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text || text.startsWith('#')) continue;
+    const eq = text.indexOf('=');
+    if (eq < 0) continue;
+
+    const key = text.slice(0, eq).trim();
+    if (!key || key in process.env) continue;
+
+    const value = text.slice(eq + 1).trim();
+    const quoted = value.length > 1 && (value.startsWith('"') || value.startsWith("'")) && value.at(-1) === value[0];
+    process.env[key] = quoted ? value.slice(1, -1) : value;
+  }
+}
+
 const envFile = path.join(ROOT, '.env');
-if (existsSync(envFile)) process.loadEnvFile(envFile);
+if (existsSync(envFile)) loadEnv(envFile);
 
 const bool = (v, def = false) => (v === undefined ? def : /^(1|true|yes|on)$/i.test(String(v)));
 
