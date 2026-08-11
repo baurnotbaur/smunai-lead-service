@@ -1,14 +1,24 @@
 import http from 'node:http';
 import { config } from './src/config.js';
-import { db } from './src/db.js';
+import { db, dbError } from './src/db.js';
 import { purgeExpiredSessions } from './src/auth.js';
 import { closeAll } from './src/events.js';
 import { handleRequest } from './src/app.js';
 
 const server = http.createServer(handleRequest);
 
-purgeExpiredSessions(db);
-setInterval(() => purgeExpiredSessions(db), 6 * 3600 * 1000).unref();
+// база может быть недоступна — сервис всё равно должен подняться и объяснить причину
+// на /api/v1/health, а не падать с безымянной ошибкой
+function purge() {
+  try {
+    purgeExpiredSessions(db);
+  } catch (err) {
+    console.error('[db] чистка сессий не удалась:', err?.message || err);
+  }
+}
+
+if (!dbError) purge();
+setInterval(purge, 6 * 3600 * 1000).unref();
 
 server.listen(config.port, () => {
   console.log(`\n  Сервис заявок запущен`);

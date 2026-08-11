@@ -1,6 +1,7 @@
 import { json, send, readInput, clientIp } from '../http.js';
 import { config } from '../config.js';
 import { createRateLimiter } from '../util.js';
+import { dbError } from '../db.js';
 import { createLead, findSiteByKey, originAllowed } from '../leads.js';
 
 const perMinute = createRateLimiter({ limit: 20, windowMs: 60_000 });
@@ -27,8 +28,15 @@ export async function handlePublic(req, res, url) {
   // состояние сервиса без ключа: видно, какая база подключена и жива ли вообще сборка
   if (url.pathname === '/api/v1/health') {
     json(
-      res, 200,
-      { ok: true, db: config.tursoUrl ? 'turso' : 'file', persistent: !config.ephemeralDb, live: !config.serverless },
+      res, dbError ? 503 : 200,
+      {
+        ok: !dbError,
+        db: config.tursoUrl ? 'turso' : 'file',
+        persistent: !config.ephemeralDb,
+        live: !config.serverless,
+        // текст ошибки нужен, чтобы понять причину отказа базы, не заглядывая в логи
+        ...(dbError ? { error: 'db_unavailable', message: String(dbError.message || dbError) } : {}),
+      },
       cors(req),
     );
     return true;

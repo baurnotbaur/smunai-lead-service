@@ -15,7 +15,20 @@ function connect() {
   return new Database(config.dbPath);
 }
 
-const connection = connect();
+/**
+ * Причина, по которой база недоступна, или null. Раньше падение здесь роняло
+ * всю функцию с безымянной ошибкой — снаружи было не понять, что случилось.
+ * Теперь сервис поднимается и честно отвечает, что именно сломалось.
+ */
+export let dbError = null;
+
+let connection = null;
+try {
+  connection = connect();
+} catch (err) {
+  dbError = err;
+  console.error('[db] не удалось подключиться:', err?.message || err);
+}
 
 /** Драйвер кладёт в каждую строку служебное поле — в ответы API ему попадать незачем. */
 function clean(row) {
@@ -25,27 +38,34 @@ function clean(row) {
 
 // Обёртка оставляет привычные prepare/exec и снимает служебное поле,
 // чтобы остальной код ничего не знал об особенностях драйвера.
+function alive() {
+  if (!connection) throw Object.assign(new Error('База недоступна'), { status: 503 });
+  return connection;
+}
+
 export const db = {
   prepare(sql) {
-    const stmt = connection.prepare(sql);
+    const stmt = alive().prepare(sql);
     return {
       get: (...args) => clean(stmt.get(...args)),
       all: (...args) => stmt.all(...args).map(clean),
       run: (...args) => stmt.run(...args),
     };
   },
-  exec: (sql) => connection.exec(sql),
-  close: () => connection.close(),
+  exec: (sql) => alive().exec(sql),
+  close: () => connection?.close(),
 };
 
 // PRAGMA настраивают локальный файл; у сетевой базы этим занимается сервер
-if (!config.tursoUrl) {
+if (connection && !config.tursoUrl) {
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
   db.exec('PRAGMA busy_timeout = 5000');
 }
 
-db.exec(`
+/** Создаёт схему и первичные записи. Отделено, чтобы поймать отказ сетевой базы. */
+function initSchema() {
+  db.exec(`
 CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   email         TEXT NOT NULL UNIQUE,
@@ -205,56 +225,66 @@ CREATE TABLE IF NOT EXISTS lead_events (
 CREATE INDEX IF NOT EXISTS idx_events_lead ON lead_events(lead_id, id);
 `);
 
-// --- миграции ---------------------------------------------------------------
+  // --- миграции ---------------------------------------------------------------
 
-/** Добавляет колонку, если её ещё нет: база могла создаваться прошлой версией. */
-function addColumn(table, column, definition) {
-  const exists = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
-  if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-}
+  /** Добавляет колонку, если её ещё нет: база могла создаваться прошлой версией. */
+  function addColumn(table, column, definition) {
+    const exists = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+    if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 
-addColumn('leads', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE SET NULL');
-addColumn('leads', 'contact_id', 'INTEGER REFERENCES contacts(id) ON DELETE SET NULL');
+  addColumn('leads', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE SET NULL');
+  addColumn('leads', 'contact_id', 'INTEGER REFERENCES contacts(id) ON DELETE SET NULL');
 
-addColumn('contacts', 'marketing_consent', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('contacts', 'consent_at', 'TEXT');
-addColumn('contacts', 'consent_source', "TEXT NOT NULL DEFAULT ''");
-addColumn('contacts', 'unsubscribed', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('contacts', 'marketing_consent', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('contacts', 'consent_at', 'TEXT');
+  addColumn('contacts', 'consent_source', "TEXT NOT NULL DEFAULT ''");
+  addColumn('contacts', 'unsubscribed', 'INTEGER NOT NULL DEFAULT 0');
 
-db.exec(`
+  db.exec(`
   CREATE INDEX IF NOT EXISTS idx_leads_company ON leads(company_id);
   CREATE INDEX IF NOT EXISTS idx_leads_contact ON leads(contact_id);
 `);
 
-// --- первичное наполнение ---------------------------------------------------
+  // --- первичное наполнение ---------------------------------------------------
 
-const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
-if (userCount === 0) {
-  db.prepare('INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)').run(
-    config.adminEmail.toLowerCase(),
-    'Администратор',
-    hashPassword(config.adminPassword),
-    'admin',
-  );
-  console.log(`[init] создан администратор: ${config.adminEmail} / ${config.adminPassword}`);
+  const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+  if (userCount === 0) {
+    db.prepare('INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)').run(
+      config.adminEmail.toLowerCase(),
+      'Администратор',
+      hashPassword(config.adminPassword),
+      'admin',
+    );
+    console.log(`[init] создан администратор: ${config.adminEmail} / ${config.adminPassword}`);
+  }
+
+  // стартовая воронка повторяет прежние статусы — старые заявки остаются валидными
+  const stageCount = db.prepare('SELECT COUNT(*) AS c FROM stages').get().c;
+  if (stageCount === 0) {
+    const insert = db.prepare('INSERT INTO stages (code, title, kind, color, sort) VALUES (?,?,?,?,?)');
+    [
+      ['new', 'Новая', 'open', 'new'],
+      ['in_work', 'В работе', 'open', 'in_work'],
+      ['callback', 'Перезвонить', 'open', 'callback'],
+      ['won', 'Успех', 'won', 'won'],
+      ['lost', 'Отказ', 'lost', 'lost'],
+    ].forEach(([code, title, kind, color], i) => insert.run(code, title, kind, color, (i + 1) * 10));
+  }
+
+  const siteCount = db.prepare('SELECT COUNT(*) AS c FROM sites').get().c;
+  if (siteCount === 0) {
+    const key = randomKey(24);
+    db.prepare('INSERT INTO sites (name, domains, public_key) VALUES (?, ?, ?)').run('Мой сайт', '', key);
+    console.log(`[init] создан сайт «Мой сайт», ключ: ${key}`);
+  }
 }
 
-// стартовая воронка повторяет прежние статусы — старые заявки остаются валидными
-const stageCount = db.prepare('SELECT COUNT(*) AS c FROM stages').get().c;
-if (stageCount === 0) {
-  const insert = db.prepare('INSERT INTO stages (code, title, kind, color, sort) VALUES (?,?,?,?,?)');
-  [
-    ['new', 'Новая', 'open', 'new'],
-    ['in_work', 'В работе', 'open', 'in_work'],
-    ['callback', 'Перезвонить', 'open', 'callback'],
-    ['won', 'Успех', 'won', 'won'],
-    ['lost', 'Отказ', 'lost', 'lost'],
-  ].forEach(([code, title, kind, color], i) => insert.run(code, title, kind, color, (i + 1) * 10));
-}
-
-const siteCount = db.prepare('SELECT COUNT(*) AS c FROM sites').get().c;
-if (siteCount === 0) {
-  const key = randomKey(24);
-  db.prepare('INSERT INTO sites (name, domains, public_key) VALUES (?, ?, ?)').run('Мой сайт', '', key);
-  console.log(`[init] создан сайт «Мой сайт», ключ: ${key}`);
+if (connection) {
+  try {
+    initSchema();
+  } catch (err) {
+    dbError = err;
+    console.error('[db] схема не создана:', err?.message || err);
+  }
 }
