@@ -8,7 +8,8 @@ import { send, serveStatic } from './src/http.js';
 import { handlePublic } from './src/routes/public.js';
 import { handleApi } from './src/routes/api.js';
 
-const PUBLIC_DIR = path.join(ROOT, 'public');
+// не «public»: Vercel считает папку с таким именем готовой статикой и не запускает сервер
+const PUBLIC_DIR = path.join(ROOT, 'panel');
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
