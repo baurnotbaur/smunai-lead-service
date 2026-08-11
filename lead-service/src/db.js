@@ -1,17 +1,49 @@
-import { DatabaseSync } from 'node:sqlite';
+import Database from 'libsql';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { hashPassword } from './auth.js';
 import { randomKey } from './util.js';
 
-mkdirSync(path.dirname(config.dbPath), { recursive: true });
+/**
+ * Подключение: сетевая база Turso, если задан её адрес, иначе локальный файл.
+ * Диалект SQL один и тот же, поэтому запросы ниже не различают эти случаи.
+ */
+function connect() {
+  if (config.tursoUrl) return new Database(config.tursoUrl, { authToken: config.tursoToken });
+  mkdirSync(path.dirname(config.dbPath), { recursive: true });
+  return new Database(config.dbPath);
+}
 
-export const db = new DatabaseSync(config.dbPath);
+const connection = connect();
 
-db.exec('PRAGMA journal_mode = WAL');
-db.exec('PRAGMA foreign_keys = ON');
-db.exec('PRAGMA busy_timeout = 5000');
+/** Драйвер кладёт в каждую строку служебное поле — в ответы API ему попадать незачем. */
+function clean(row) {
+  if (row) delete row._metadata;
+  return row;
+}
+
+// Обёртка оставляет привычные prepare/exec и снимает служебное поле,
+// чтобы остальной код ничего не знал об особенностях драйвера.
+export const db = {
+  prepare(sql) {
+    const stmt = connection.prepare(sql);
+    return {
+      get: (...args) => clean(stmt.get(...args)),
+      all: (...args) => stmt.all(...args).map(clean),
+      run: (...args) => stmt.run(...args),
+    };
+  },
+  exec: (sql) => connection.exec(sql),
+  close: () => connection.close(),
+};
+
+// PRAGMA настраивают локальный файл; у сетевой базы этим занимается сервер
+if (!config.tursoUrl) {
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA foreign_keys = ON');
+  db.exec('PRAGMA busy_timeout = 5000');
+}
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (

@@ -5,10 +5,11 @@
 ## `lead-service/` — мини-CRM для отдела продаж
 
 Приём заявок с сайта и работа с ними: статусы, ответственные, доска, аналитика, выгрузка CSV,
-уведомления в Telegram. Node.js 22+, база — файл SQLite, внешних зависимостей нет.
+уведомления в Telegram. Node.js 24+, база — SQLite: локально файл, в облаке Turso по сети.
 
 ```bash
 cd lead-service
+npm install
 cp .env.example .env
 npm start
 ```

@@ -14,10 +14,15 @@ const bool = (v, def = false) => (v === undefined ? def : /^(1|true|yes|on)$/i.t
 const serverless = Boolean(process.env.VERCEL);
 const defaultDb = serverless ? '/tmp/leads.db' : './data/leads.db';
 
+// Turso — та же SQLite, только по сети. Задан адрес — работаем с ней, иначе с локальным файлом.
+const tursoUrl = process.env.TURSO_DATABASE_URL || '';
+
 export const config = {
   serverless,
+  tursoUrl,
+  tursoToken: process.env.TURSO_AUTH_TOKEN || '',
   // база во временной папке: переживает тёплые запросы, но не холодный старт
-  ephemeralDb: serverless && !process.env.DB_PATH,
+  ephemeralDb: serverless && !tursoUrl && !process.env.DB_PATH,
   port: Number(process.env.PORT || 4000),
   publicUrl: (process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 4000}`).replace(/\/+$/, ''),
   sessionSecret: process.env.SESSION_SECRET || 'insecure-dev-secret-change-me',
@@ -36,6 +41,10 @@ if (config.sessionSecret === 'insecure-dev-secret-change-me') {
 if (config.ephemeralDb) {
   console.warn(
     '[warn] База лежит в /tmp и стирается при холодном старте: заявки будут теряться. ' +
-      'Для рабочего сервиса подключите внешнюю базу и задайте DB_PATH.',
+      'Для рабочего сервиса задайте TURSO_DATABASE_URL и TURSO_AUTH_TOKEN.',
   );
+}
+
+if (config.tursoUrl && !config.tursoToken) {
+  console.warn('[warn] TURSO_DATABASE_URL задан без TURSO_AUTH_TOKEN — база не пустит без токена');
 }
