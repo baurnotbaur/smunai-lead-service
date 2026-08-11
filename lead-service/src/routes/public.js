@@ -1,4 +1,5 @@
 import { json, send, readInput, clientIp } from '../http.js';
+import { config } from '../config.js';
 import { createRateLimiter } from '../util.js';
 import { createLead, findSiteByKey, originAllowed } from '../leads.js';
 
@@ -20,6 +21,16 @@ function cors(req, extra = {}) {
 export async function handlePublic(req, res, url) {
   if (url.pathname === '/api/v1/leads' && req.method === 'OPTIONS') {
     send(res, 204, '', cors(req));
+    return true;
+  }
+
+  // состояние сервиса без ключа: видно, какая база подключена и жива ли вообще сборка
+  if (url.pathname === '/api/v1/health') {
+    json(
+      res, 200,
+      { ok: true, db: config.tursoUrl ? 'turso' : 'file', persistent: !config.ephemeralDb, live: !config.serverless },
+      cors(req),
+    );
     return true;
   }
 
