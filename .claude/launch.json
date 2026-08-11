@@ -14,6 +14,12 @@
       "port": 4000
     },
     {
+      "name": "procure-service",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["procure-service/server.js"],
+      "port": 4100
+    },
+    {
       "name": "smunai-dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "smunai-digital-drive"],
