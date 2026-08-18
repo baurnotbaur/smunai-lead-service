@@ -63,7 +63,10 @@ export function createLead(input, meta) {
   const comment = clip(input.comment ?? input.message, 2000);
   const phoneNorm = normalizePhone(phoneRaw);
 
-  if (!phoneNorm && !email) {
+  // В переписке контактов может не быть вовсе — в Instagram видно только id собеседника.
+  // Это не мешает работать: ответить ему можно прямо в диалоге, а телефон спросит бот.
+  const fromMessenger = meta.channel && meta.channel !== 'site';
+  if (!phoneNorm && !email && !fromMessenger) {
     return { ok: false, error: 'contact_required', message: 'Укажите телефон или email' };
   }
   if (phoneNorm && phoneNorm.length < 10) {
@@ -92,7 +95,8 @@ export function createLead(input, meta) {
         .get(phoneNorm, `-${DUPLICATE_WINDOW_MIN} minutes`)
     : null;
 
-  const manager = site?.auto_assign ? pickManager() : null;
+  // у переписки нет карточки сайта, но распределять её между менеджерами всё равно надо
+  const manager = (site ? site.auto_assign : true) ? pickManager() : null;
 
   // узнаём клиента: тот же телефон — тот же контакт, та же организация — та же компания
   const { companyId, contactId } = linkLeadParties({
@@ -111,8 +115,9 @@ export function createLead(input, meta) {
          company_id, contact_id, status,
          form_id, page_url, referrer,
          utm_source, utm_medium, utm_campaign, utm_content, utm_term,
-         ip, user_agent, is_duplicate
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         ip, user_agent, is_duplicate,
+         channel, external_id
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       site?.id ?? null,
@@ -137,13 +142,16 @@ export function createLead(input, meta) {
       clip(meta.ip, 60),
       clip(meta.userAgent, 300),
       dupe ? 1 : 0,
+      meta.channel || 'site',
+      clip(meta.externalId, 80),
     );
 
   const id = Number(info.lastInsertRowid);
+  const CHANNEL_TITLES = { whatsapp: 'Написал в WhatsApp', instagram: 'Написал в Instagram' };
   db.prepare('INSERT INTO lead_events (lead_id, type, text) VALUES (?, ?, ?)').run(
     id,
     'created',
-    `Заявка с сайта${site ? ' «' + site.name + '»' : ''}`,
+    CHANNEL_TITLES[meta.channel] || `Заявка с сайта${site ? ' «' + site.name + '»' : ''}`,
   );
   if (manager) {
     db.prepare('INSERT INTO lead_events (lead_id, type, text) VALUES (?, ?, ?)').run(

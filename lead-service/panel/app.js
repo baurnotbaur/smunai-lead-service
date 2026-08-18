@@ -16,6 +16,13 @@
   const isLostStage = (code) => stageOf(code)?.kind === 'lost';
   const isOpenStage = (code) => stageOf(code)?.kind === 'open';
 
+  /* ---------- каналы ---------- */
+  // Заявка приходит либо с формы на сайте, либо перепиской из мессенджера.
+
+  const CHANNELS = { whatsapp: 'WhatsApp', instagram: 'Instagram' };
+  const channelName = (lead) => CHANNELS[lead?.channel] || '';
+  const isChat = (lead) => Boolean(channelName(lead) && lead.external_id);
+
   /* ---------- утилиты ---------- */
 
   const esc = (s) =>
@@ -273,7 +280,7 @@
         <td class="nowrap">${statusPill(l.status)} ${isOverdue(l) ? '<span class="pill pill--overdue">просрочка</span>' : ''}</td>
         <td class="nowrap">${esc(l.assigned_name || '—')}</td>
         <td class="nowrap muted" style="font-size:12px">
-          ${esc(l.utm_source || l.site_name || '—')}${l.utm_campaign ? '<br>' + esc(l.utm_campaign) : ''}
+          ${esc(channelName(l) || l.utm_source || l.site_name || '—')}${l.utm_campaign ? '<br>' + esc(l.utm_campaign) : ''}
         </td>
       </tr>`;
   }
@@ -685,7 +692,7 @@
   /* ---------- заявки: карточка ---------- */
 
   async function renderLead(id) {
-    const [{ lead, events }, tasksRes] = await Promise.all([api('/leads/' + id), api('/tasks?lead=' + id)]);
+    const [{ lead, events, messages = [] }, tasksRes] = await Promise.all([api('/leads/' + id), api('/tasks?lead=' + id)]);
     const extra = JSON.parse(lead.extra || '{}');
     const tasks = tasksRes.items;
 
@@ -715,6 +722,7 @@
               <dt>Комментарий</dt><dd>${esc(lead.comment) || '—'}</dd>
               <dt>Создана</dt><dd>${fmtDate(lead.created_at)} <span class="muted">(${ago(lead.created_at)})</span></dd>
               <dt>Первый контакт</dt><dd>${lead.first_touch_at ? fmtDate(lead.first_touch_at) : '<span style="color:var(--red)">ещё не было</span>'}</dd>
+              <dt>Канал</dt><dd>${channelName(lead) || 'Форма на сайте'}</dd>
               <dt>Сайт</dt><dd>${esc(lead.site_name || '—')}</dd>
               <dt>Страница</dt><dd>${lead.page_url ? `<a href="${esc(lead.page_url)}" target="_blank" rel="noopener">${esc(lead.page_url)}</a>` : '—'}</dd>
               <dt>UTM</dt><dd class="mono">${esc([lead.utm_source, lead.utm_medium, lead.utm_campaign, lead.utm_content, lead.utm_term].filter(Boolean).join(' / ')) || '—'}</dd>
@@ -748,6 +756,24 @@
               </table>
             </div>` : '<div class="muted">Дел по заявке нет.</div>'}
           </div>
+
+          ${isChat(lead) ? `
+          <div class="card">
+            <h2 style="margin-bottom:12px">Переписка · ${channelName(lead)}</h2>
+            <div class="chat">
+              ${messages.length
+                ? messages.map((m) => `
+                  <div class="chat__msg chat__msg--${m.direction === 'in' ? 'in' : 'out'}">
+                    <div>${m.kind === 'text' ? esc(m.text) : `<span class="muted">[${esc(m.kind)}]</span> ${esc(m.text)}`}</div>
+                    <div class="when">${fmtDate(m.created_at)}</div>
+                  </div>`).join('')
+                : '<div class="muted">Сообщений нет.</div>'}
+            </div>
+            <form id="replyForm" style="margin-top:12px">
+              <textarea name="text" placeholder="Ответить клиенту в ${channelName(lead)}…" required></textarea>
+              <button class="btn btn--primary btn--sm" style="margin-top:8px" type="submit">Отправить</button>
+            </form>
+          </div>` : ''}
 
           <div class="card">
             <h2 style="margin-bottom:12px">История</h2>
@@ -825,6 +851,22 @@
         renderLead(id);
       } catch (err) {
         toast(err.message, true);
+      }
+    });
+
+    $('#replyForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const button = e.target.querySelector('[type="submit"]');
+      const text = new FormData(e.target).get('text');
+      button.disabled = true;
+      try {
+        await api(`/leads/${id}/reply`, { method: 'POST', body: { text } });
+        renderLead(id);
+      } catch (err) {
+        // отправка могла не пройти из-за окна в 24 часа или отозванного токена —
+        // текст ошибки от Meta лучше показать как есть, он объясняет причину
+        toast(err.message, true);
+        button.disabled = false;
       }
     });
 

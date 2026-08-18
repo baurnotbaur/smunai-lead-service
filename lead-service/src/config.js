@@ -54,6 +54,24 @@ export const config = {
   telegramToken: process.env.TELEGRAM_BOT_TOKEN || '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
   secureCookies: bool(process.env.SECURE_COOKIES, false),
+
+  // WhatsApp и Instagram: оба канала идут через Meta и один общий вебхук
+  meta: {
+    // строка, которую Meta пришлёт при подключении вебхука — придумывается произвольно
+    verifyToken: process.env.META_VERIFY_TOKEN || '',
+    // секрет приложения: им подписан каждый запрос, без проверки подписи вебхук открыт всему миру
+    appSecret: process.env.META_APP_SECRET || '',
+    graphVersion: process.env.META_GRAPH_VERSION || 'v21.0',
+    whatsapp: {
+      token: process.env.WHATSAPP_TOKEN || '',
+      phoneId: process.env.WHATSAPP_PHONE_ID || '',
+    },
+    instagram: {
+      token: process.env.INSTAGRAM_TOKEN || '',
+    },
+  },
+  // автоответ в переписке: выключается, когда с клиентами говорят только руками
+  botEnabled: bool(process.env.BOT_ENABLED, true),
 };
 
 if (config.sessionSecret === 'insecure-dev-secret-change-me') {

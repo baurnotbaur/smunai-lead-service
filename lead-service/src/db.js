@@ -223,6 +223,23 @@ CREATE TABLE IF NOT EXISTS lead_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_lead ON lead_events(lead_id, id);
+
+-- Переписка из WhatsApp и Instagram. Заявка здесь играет роль диалога:
+-- все сообщения одного клиента в одном канале висят на ней.
+CREATE TABLE IF NOT EXISTS messages (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id     INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  channel     TEXT NOT NULL,                        -- whatsapp | instagram
+  direction   TEXT NOT NULL,                        -- in | out
+  kind        TEXT NOT NULL DEFAULT 'text',         -- text | image | audio | video | other
+  text        TEXT NOT NULL DEFAULT '',
+  -- идентификатор сообщения у Meta: она повторяет доставку, пока не получит 200
+  external_id TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_lead ON messages(lead_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_external ON messages(external_id) WHERE external_id <> '';
 `);
 
   // --- миграции ---------------------------------------------------------------
@@ -236,6 +253,12 @@ CREATE INDEX IF NOT EXISTS idx_events_lead ON lead_events(lead_id, id);
   addColumn('leads', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE SET NULL');
   addColumn('leads', 'contact_id', 'INTEGER REFERENCES contacts(id) ON DELETE SET NULL');
 
+  // откуда пришла заявка: форма на сайте или переписка в мессенджере
+  addColumn('leads', 'channel', "TEXT NOT NULL DEFAULT 'site'");
+  // кто написал: wa_id в WhatsApp, id отправителя в Instagram — по нему узнаём вернувшегося
+  addColumn('leads', 'external_id', "TEXT NOT NULL DEFAULT ''");
+  addColumn('leads', 'last_message_at', 'TEXT');
+
   addColumn('contacts', 'marketing_consent', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('contacts', 'consent_at', 'TEXT');
   addColumn('contacts', 'consent_source', "TEXT NOT NULL DEFAULT ''");
@@ -244,6 +267,8 @@ CREATE INDEX IF NOT EXISTS idx_events_lead ON lead_events(lead_id, id);
   db.exec(`
   CREATE INDEX IF NOT EXISTS idx_leads_company ON leads(company_id);
   CREATE INDEX IF NOT EXISTS idx_leads_contact ON leads(contact_id);
+  CREATE INDEX IF NOT EXISTS idx_leads_channel  ON leads(channel);
+  CREATE INDEX IF NOT EXISTS idx_leads_external ON leads(channel, external_id);
 `);
 
   // --- первичное наполнение ---------------------------------------------------

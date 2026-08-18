@@ -13,6 +13,7 @@ import {
   audience, audienceStats, audienceCsv, audiencePreviewCsv,
 } from '../marketing.js';
 import { subscribe } from '../events.js';
+import { listMessages, replyAsManager } from '../conversations.js';
 import { clip, randomKey, isEmail } from '../util.js';
 import {
   listStages, codesOfKind, inClause, stageTitles,
@@ -336,7 +337,7 @@ export async function handleApi(req, res, url) {
             WHERE e.lead_id = ? ORDER BY e.id ASC`,
         )
         .all(id);
-      json(res, 200, { ok: true, lead, events });
+      json(res, 200, { ok: true, lead, events, messages: listMessages(id) });
       return true;
     }
     if (req.method === 'PATCH' || req.method === 'PUT') {
@@ -359,6 +360,25 @@ export async function handleApi(req, res, url) {
       json(res, 200, { ok: true });
       return true;
     }
+  }
+
+  // ответ клиенту прямо из карточки — уходит в тот мессенджер, откуда он написал
+  const replyMatch = p.match(/^\/api\/leads\/(\d+)\/reply$/);
+  if (replyMatch && req.method === 'POST') {
+    const body = await readInput(req);
+    const text = clip(body.text, 4000);
+    if (!text) {
+      json(res, 400, { ok: false, message: 'Пустое сообщение' });
+      return true;
+    }
+    try {
+      const sent = await replyAsManager(Number(replyMatch[1]), text, user);
+      if (!sent) json(res, 404, { ok: false, error: 'not_found' });
+      else json(res, 200, { ok: true, messages: listMessages(Number(replyMatch[1])) });
+    } catch (e) {
+      json(res, e.status || 502, { ok: false, message: e.message });
+    }
+    return true;
   }
 
   const commentMatch = p.match(/^\/api\/leads\/(\d+)\/comments$/);

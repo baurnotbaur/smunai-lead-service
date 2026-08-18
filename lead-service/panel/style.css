@@ -211,6 +211,19 @@ pre.snippet .str { color: #8fd694; }
 
 .empty { text-align: center; padding: 50px 20px; color: var(--muted); }
 
+/* Переписка из мессенджеров: клиент слева, наши ответы справа */
+.chat { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
+.chat__msg {
+  max-width: 78%; padding: 8px 12px; border-radius: 12px;
+  background: var(--panel-2); border: 1px solid var(--border); word-break: break-word;
+}
+.chat__msg--in { align-self: flex-start; border-bottom-left-radius: 4px; }
+.chat__msg--out {
+  align-self: flex-end; border-bottom-right-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel-2));
+}
+.chat__msg .when { color: var(--muted); font-size: 11px; margin-top: 4px; }
+
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; }

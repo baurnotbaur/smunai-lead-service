@@ -8,6 +8,7 @@ import path from 'node:path';
 import { ROOT } from './config.js';
 import { send, serveStatic } from './http.js';
 import { handlePublic } from './routes/public.js';
+import { handleMeta } from './routes/meta.js';
 import { handleApi } from './routes/api.js';
 
 // не «public»: папку с таким именем Vercel принимает за готовую статику
@@ -18,6 +19,7 @@ export async function handleRequest(req, res) {
 
   try {
     if (await handlePublic(req, res, url)) return;
+    if (await handleMeta(req, res, url)) return;
     if (await handleApi(req, res, url)) return;
 
     // embed.js должен грузиться с любого домена

@@ -6,6 +6,8 @@ node_modules/
 smunai-digital-drive/
 # procure-service — ИИ-мастер по закупке, отдельный проект
 procure-service/
+# cup3d — сборка 3D-модели кружки по фотографиям, к заявкам отношения не имеет
+cup3d/
 
 # служебный файл предпросмотра (2.4 МБ, генерируется заново)
 _preview.html
