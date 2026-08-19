@@ -1,16 +1,21 @@
 /**
- * Ответы бота через Claude.
+ * Ответы бота через Gemini.
  *
- * Главное правило заложено в системный промпт: отвечать только по базе знаний.
+ * Главное правило заложено в системную инструкцию: отвечать только по базе знаний.
  * Клиенту, которому назвали выдуманную цену или адрес, потом объясняться будет
  * отдел продаж, поэтому на всё, чего нет в базе, бот зовёт менеджера.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI } from '@google/genai';
 import { config } from './config.js';
 import { getSetting } from './settings.js';
 
-const client = config.ai.apiKey ? new Anthropic({ apiKey: config.ai.apiKey }) : null;
+const client = config.ai.apiKey
+  ? new GoogleGenAI({
+      apiKey: config.ai.apiKey,
+      ...(config.ai.baseUrl ? { httpOptions: { baseUrl: config.ai.baseUrl } } : {}),
+    })
+  : null;
 
 export const aiEnabled = () => Boolean(client);
 
@@ -37,7 +42,6 @@ const SCHEMA = {
     },
   },
   required: ['reply', 'needs_human', 'topic'],
-  additionalProperties: false,
 };
 
 function systemPrompt(channel) {
@@ -70,61 +74,60 @@ ${greeting ? `\nПри первом сообщении представься т
 Ничего не обещай от имени компании: ни скидок, ни сроков, ни брони. Это решает менеджер.`;
 }
 
+/** Историю переписки складываем шагами: наши сообщения — вывод модели, клиентские — ввод. */
+function toSteps(history, fallbackText) {
+  const steps = [];
+  for (const m of history) {
+    const text = String(m.text || '').trim();
+    if (!text) continue;
+    const type = m.direction === 'in' ? 'user_input' : 'model_output';
+    // подряд идущие реплики одной стороны склеиваем в один шаг
+    const last = steps.at(-1);
+    if (last && last.type === type) {
+      last.content[0].text += '\n' + text;
+    } else {
+      steps.push({ type, content: [{ type: 'text', text }] });
+    }
+  }
+
+  if (!steps.length || steps.at(-1).type !== 'user_input') {
+    const text = String(fallbackText || '').trim() || '(пустое сообщение)';
+    steps.push({ type: 'user_input', content: [{ type: 'text', text }] });
+  }
+  return steps;
+}
+
 /**
  * Готовит ответ на входящее сообщение.
  * @param {{channel: string, history: Array<{direction: string, text: string}>, text: string}} input
- * @returns {Promise<{reply: string, needsHuman: boolean, topic: string} | null>} null — если ИИ не настроен или отказал
+ * @returns {Promise<{reply: string, needsHuman: boolean, topic: string} | null>} null — если ИИ не настроен или ответ не разобрался
  */
 export async function draftReply({ channel, history = [], text }) {
   if (!client) return null;
 
-  const messages = [];
-  for (const m of history) {
-    const role = m.direction === 'in' ? 'user' : 'assistant';
-    const content = String(m.text || '').trim();
-    if (!content) continue;
-    // Claude требует чередования ролей — подряд идущие склеиваем
-    if (messages.length && messages.at(-1).role === role) {
-      messages.at(-1).content += '\n' + content;
-    } else {
-      messages.push({ role, content });
-    }
-  }
-  if (!messages.length || messages.at(-1).role !== 'user') {
-    messages.push({ role: 'user', content: String(text || '').trim() || '(пустое сообщение)' });
-  }
-
-  const response = await client.messages.create({
+  const interaction = await client.interactions.create({
     model: config.ai.model,
-    // с запасом: на Opus 5 лимит считает и рассуждения, и текст ответа
-    max_tokens: 2048,
-    system: [
-      {
-        type: 'text',
-        text: systemPrompt(channel),
-        // база знаний между запросами не меняется — пусть считается один раз
-        cache_control: { type: 'ephemeral' },
-      },
-    ],
-    output_config: {
-      // переписка с клиентом — не место для долгих раздумий, важнее скорость ответа
-      effort: 'low',
-      format: { type: 'json_schema', schema: SCHEMA },
+    // переписку клиентов у себя храним мы, у Google ей лежать незачем
+    store: false,
+    system_instruction: systemPrompt(channel),
+    input: toSteps(history, text),
+    response_format: {
+      type: 'text',
+      mime_type: 'application/json',
+      schema: SCHEMA,
     },
-    messages,
+    generation_config: {
+      // переписка с клиентом — не место для долгих раздумий, важнее скорость ответа
+      thinking_level: 'low',
+    },
   });
 
-  if (response.stop_reason === 'refusal') {
-    console.warn('[ai] модель отказалась отвечать:', response.stop_details?.category);
-    return null;
-  }
-
-  const block = response.content.find((b) => b.type === 'text');
-  if (!block) return null;
+  const raw = interaction.output_text;
+  if (!raw) return null;
 
   let parsed;
   try {
-    parsed = JSON.parse(block.text);
+    parsed = JSON.parse(raw);
   } catch {
     console.warn('[ai] ответ не разобрался как JSON');
     return null;

@@ -1396,7 +1396,7 @@
         </dl>
         ${data.ai ? '' : `
         <p class="muted" style="margin-top:10px">
-          Чтобы отвечал ИИ, задайте переменную окружения <span class="mono">ANTHROPIC_API_KEY</span> и перезапустите сервис.
+          Чтобы отвечал ИИ, задайте переменную окружения <span class="mono">GEMINI_API_KEY</span> и перезапустите сервис.
         </p>`}
       </div>
 

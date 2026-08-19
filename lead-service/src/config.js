@@ -73,11 +73,13 @@ export const config = {
   // автоответ в переписке: выключается, когда с клиентами говорят только руками
   botEnabled: bool(process.env.BOT_ENABLED, true),
 
-  // Claude отвечает клиентам по базе знаний из панели. Без ключа бот остаётся
+  // Gemini отвечает клиентам по базе знаний из панели. Без ключа бот остаётся
   // сценарным: здоровается, просит телефон и зовёт менеджера.
   ai: {
-    apiKey: process.env.ANTHROPIC_API_KEY || '',
-    model: process.env.BOT_MODEL || 'claude-opus-5',
+    apiKey: process.env.GEMINI_API_KEY || '',
+    model: process.env.BOT_MODEL || 'gemini-3.7-flash',
+    // нестандартный адрес API — нужен, если запросы идут через прокси
+    baseUrl: process.env.GEMINI_BASE_URL || '',
   },
 };
 
