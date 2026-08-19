@@ -44,6 +44,24 @@ export function parseIncoming(body) {
     // --- WhatsApp -----------------------------------------------------------
     for (const change of entry.changes || []) {
       const value = change.value || {};
+
+      // комментарий под постом в Instagram — не переписка, но такой же повод для заявки
+      if (change.field === 'comments' && value.id) {
+        // свои же ответы прилетают обратно тем же событием
+        if (value.from?.id && value.from.id === entry.id) continue;
+        out.push({
+          channel: 'instagram',
+          kind: 'comment',
+          externalId: value.from?.id || '',
+          commentId: value.id,
+          name: value.from?.username || '',
+          phone: '',
+          text: value.text || '',
+          messageId: 'comment:' + value.id,
+        });
+        continue;
+      }
+
       // статусы доставки приходят сюда же — они не сообщения, пропускаем
       if (!value.messages) continue;
 
@@ -80,7 +98,15 @@ export function parseIncoming(body) {
     }
   }
 
-  return out.filter((m) => m.externalId);
+  // у комментария может не быть id автора, но ответить под ним всё равно можно
+  return out.filter((m) => m.externalId || m.commentId);
+}
+
+/** Публичный ответ под комментарием. */
+export function replyToComment(commentId, text) {
+  const { token } = meta.instagram;
+  if (!token) throw new Error('Instagram не настроен: нет INSTAGRAM_TOKEN');
+  return post(graph(`${commentId}/replies`), token, { message: text });
 }
 
 async function post(url, token, payload) {

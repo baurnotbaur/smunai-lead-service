@@ -72,6 +72,13 @@ export const config = {
   },
   // автоответ в переписке: выключается, когда с клиентами говорят только руками
   botEnabled: bool(process.env.BOT_ENABLED, true),
+
+  // Claude отвечает клиентам по базе знаний из панели. Без ключа бот остаётся
+  // сценарным: здоровается, просит телефон и зовёт менеджера.
+  ai: {
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    model: process.env.BOT_MODEL || 'claude-opus-5',
+  },
 };
 
 if (config.sessionSecret === 'insecure-dev-secret-change-me') {

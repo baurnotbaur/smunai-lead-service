@@ -14,6 +14,8 @@ import {
 } from '../marketing.js';
 import { subscribe } from '../events.js';
 import { listMessages, replyAsManager } from '../conversations.js';
+import { allSettings, setSetting, knowledgeLooksUnfilled } from '../settings.js';
+import { aiEnabled } from '../ai.js';
 import { clip, randomKey, isEmail } from '../util.js';
 import {
   listStages, codesOfKind, inClause, stageTitles,
@@ -273,6 +275,29 @@ export async function handleApi(req, res, url) {
   if (p === '/api/me') {
     // live=false — панель не станет открывать поток событий и обойдётся без живых обновлений
     json(res, 200, { ok: true, user, live: !config.serverless });
+    return true;
+  }
+
+  /* ---------- бот: база знаний ---------- */
+
+  if (p === '/api/settings' && req.method === 'GET') {
+    json(res, 200, {
+      ok: true,
+      settings: allSettings(),
+      ai: aiEnabled(),
+      model: config.ai.model,
+      knowledge_unfilled: knowledgeLooksUnfilled(),
+    });
+    return true;
+  }
+
+  if (p === '/api/settings' && (req.method === 'PUT' || req.method === 'PATCH')) {
+    if (!isAdmin) return denyNonAdmin();
+    const body = await readInput(req);
+    for (const key of ['bot_knowledge', 'bot_greeting']) {
+      if (key in body) setSetting(key, clip(body[key], 20000));
+    }
+    json(res, 200, { ok: true, settings: allSettings(), knowledge_unfilled: knowledgeLooksUnfilled() });
     return true;
   }
 

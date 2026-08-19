@@ -8,7 +8,8 @@ import { config } from './config.js';
 import { clip, normalizePhone } from './util.js';
 import { createLead } from './leads.js';
 import { codesOfKind } from './stages.js';
-import { send, canReply } from './channels/meta.js';
+import { send, canReply, replyToComment } from './channels/meta.js';
+import { draftReply, aiEnabled } from './ai.js';
 import { broadcast } from './events.js';
 
 const CHANNELS = { whatsapp: 'WhatsApp', instagram: 'Instagram' };
@@ -47,12 +48,11 @@ function phoneFrom(text) {
 }
 
 /**
- * Что ответить. Бот намеренно не выдумывает ответы про цены и адреса —
- * он здоровается, забирает телефон и передаёт разговор живому менеджеру.
+ * Запасной сценарий на случай, когда Claude не настроен или не ответил.
+ * Он намеренно не выдумывает ответы про цены и адреса — здоровается,
+ * забирает телефон и передаёт разговор живому менеджеру.
  */
-function botReply({ lead, isNew, text }) {
-  if (!config.botEnabled) return '';
-
+function scriptedReply({ lead, isNew, text }) {
   if (isNew) {
     return lead.phone
       ? 'Здравствуйте! Это С-Мұнай. Спасибо за обращение — менеджер ответит в течение 15 минут в рабочее время.'
@@ -67,13 +67,58 @@ function botReply({ lead, isNew, text }) {
   return '';
 }
 
+/** Передаёт разговор менеджеру: бот замолкает, в истории остаётся отметка. */
+function handOver(leadId, reason) {
+  const { changes } = db.prepare('UPDATE leads SET bot_off = 1 WHERE id = ? AND bot_off = 0').run(leadId);
+  if (!changes) return;
+  db.prepare('INSERT INTO lead_events (lead_id, type, text) VALUES (?, ?, ?)').run(
+    leadId,
+    'field',
+    `Бот передал разговор менеджеру${reason ? ': ' + reason : ''}`,
+  );
+  broadcast('lead:update', { id: leadId, status: null, by: 0 });
+}
+
+/**
+ * Что ответить клиенту. Сначала спрашиваем Claude — он отвечает по базе знаний
+ * из панели; если ключа нет или запрос не удался, работает сценарный запасной вариант.
+ */
+async function composeReply({ lead, isNew, text, channel }) {
+  if (!config.botEnabled || lead.bot_off) return { reply: '', handOff: '' };
+
+  if (aiEnabled()) {
+    try {
+      const draft = await draftReply({
+        channel,
+        history: listMessages(lead.id).map((m) => ({ direction: m.direction, text: m.text })),
+        text,
+      });
+      if (draft) {
+        return {
+          reply: draft.reply,
+          handOff: draft.needsHuman ? draft.topic || 'нужен живой ответ' : '',
+        };
+      }
+    } catch (err) {
+      // модель недоступна или отказала — клиент не должен остаться без ответа
+      console.error('[ai] не удалось получить ответ:', err.message);
+    }
+  }
+
+  return { reply: scriptedReply({ lead, isNew, text }), handOff: '' };
+}
+
 /**
  * Принимает одно входящее сообщение: заводит или находит заявку, пишет историю,
  * при необходимости отвечает.
  * @returns {{leadId: number, isNew: boolean, replied: boolean, skipped?: string}}
  */
 export async function handleMessage(incoming) {
-  const { channel, externalId, name, phone, text, kind, messageId } = incoming;
+  const { channel, name, phone, text, kind, messageId, commentId } = incoming;
+  const isComment = kind === 'comment';
+  // у комментария автор известен не всегда — тогда веткой разговора служит сам комментарий
+  const externalId = incoming.externalId || (commentId ? 'comment:' + commentId : '');
+  if (!externalId) return { leadId: 0, isNew: false, replied: false, skipped: 'no_sender' };
 
   // Meta повторяет доставку, пока не получит 200 — без этой проверки
   // один и тот же вопрос клиента превратился бы в несколько заявок
@@ -106,18 +151,28 @@ export async function handleMessage(incoming) {
 
   if (!isNew) broadcast('lead:update', { id: lead.id, status: lead.status, by: 0 });
 
-  const reply = botReply({ lead, isNew, text });
+  // перечитываем: телефон мог только что дописаться, а bot_off — смениться
+  const fresh = db.prepare('SELECT * FROM leads WHERE id = ?').get(lead.id);
+  const { reply, handOff } = await composeReply({
+    lead: fresh,
+    isNew,
+    text,
+    channel: isComment ? 'comment' : channel,
+  });
+
   let replied = false;
-  if (reply && canReply(channel)) {
+  if (reply && (isComment ? canReply('instagram') : canReply(channel))) {
     try {
-      const sent = await send(channel, externalId, reply);
+      const sent = isComment
+        ? await replyToComment(commentId, reply)
+        : await send(channel, externalId, reply);
       saveMessage({
         leadId: lead.id,
         channel,
         direction: 'out',
-        kind: 'text',
+        kind: isComment ? 'comment' : 'text',
         text: reply,
-        messageId: sent?.messages?.[0]?.id || sent?.message_id || '',
+        messageId: sent?.messages?.[0]?.id || sent?.message_id || sent?.id || '',
       });
       replied = true;
     } catch (err) {
@@ -126,7 +181,9 @@ export async function handleMessage(incoming) {
     }
   }
 
-  return { leadId: lead.id, isNew, replied };
+  if (handOff) handOver(lead.id, handOff);
+
+  return { leadId: lead.id, isNew, replied, handOff: Boolean(handOff) };
 }
 
 /** Переписка по заявке — для карточки в панели. */
@@ -150,6 +207,8 @@ export async function replyAsManager(leadId, text, user) {
     text,
     messageId: sent?.messages?.[0]?.id || sent?.message_id || '',
   });
+  // менеджер вступил в разговор — дальше бот молчит, чтобы они не отвечали вдвоём
+  handOver(leadId, 'менеджер ответил сам');
   db.prepare('INSERT INTO lead_events (lead_id, user_id, type, text) VALUES (?, ?, ?, ?)').run(
     leadId,
     user.id,

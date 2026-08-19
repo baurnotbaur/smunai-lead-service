@@ -238,6 +238,13 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Настройки, которые меняются из панели, а не через .env: текст базы знаний бота и прочее.
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_lead ON messages(lead_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_external ON messages(external_id) WHERE external_id <> '';
 `);
@@ -258,6 +265,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_external ON messages(external_id)
   // кто написал: wa_id в WhatsApp, id отправителя в Instagram — по нему узнаём вернувшегося
   addColumn('leads', 'external_id', "TEXT NOT NULL DEFAULT ''");
   addColumn('leads', 'last_message_at', 'TEXT');
+  // разговор передан живому менеджеру — бот в него больше не вмешивается
+  addColumn('leads', 'bot_off', 'INTEGER NOT NULL DEFAULT 0');
 
   addColumn('contacts', 'marketing_consent', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('contacts', 'consent_at', 'TEXT');

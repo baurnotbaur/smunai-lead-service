@@ -121,6 +121,7 @@
     [/^\/company\/(\d+)$/, renderCompany],
     [/^\/stats$/, renderStats],
     [/^\/sites$/, renderSites],
+    [/^\/bot$/, renderBot],
     [/^\/team$/, renderTeam],
   ];
 
@@ -1372,6 +1373,73 @@
   }
 
   /* ---------- сотрудники ---------- */
+
+  /* ---------- бот ---------- */
+
+  async function renderBot() {
+    const data = await api('/settings');
+    const s = data.settings;
+    const admin = state.user.role === 'admin';
+
+    view.innerHTML = `
+      <h1 class="page-title">Бот</h1>
+
+      <div class="card" style="margin-bottom:16px">
+        <h2 style="margin-bottom:10px">Как он сейчас работает</h2>
+        <dl class="kv">
+          <dt>Ответы</dt><dd>${data.ai
+            ? `отвечает ИИ, модель <span class="mono">${esc(data.model)}</span>`
+            : '<span style="color:var(--red)">ИИ не подключён</span> — бот здоровается и зовёт менеджера'}</dd>
+          <dt>База знаний</dt><dd>${data.knowledge_unfilled
+            ? '<span style="color:var(--red)">не заполнена</span> — на вопросы о ценах и адресах бот будет отвечать «уточню у менеджера»'
+            : 'заполнена'}</dd>
+        </dl>
+        ${data.ai ? '' : `
+        <p class="muted" style="margin-top:10px">
+          Чтобы отвечал ИИ, задайте переменную окружения <span class="mono">ANTHROPIC_API_KEY</span> и перезапустите сервис.
+        </p>`}
+      </div>
+
+      <div class="card">
+        <h2 style="margin-bottom:6px">База знаний</h2>
+        <p class="muted" style="margin-bottom:12px">
+          Бот отвечает клиентам только тем, что написано здесь. Чего здесь нет — на то он
+          отвечает «уточню у менеджера» и передаёт разговор живому человеку.
+          Пишите простым текстом, как объяснили бы новому сотруднику.
+        </p>
+        <form id="botForm">
+          <label class="field">
+            <span>Что бот знает о компании</span>
+            <textarea name="bot_knowledge" rows="20" class="mono" style="font-size:13px"
+              ${admin ? '' : 'disabled'}>${esc(s.bot_knowledge)}</textarea>
+          </label>
+          <label class="field" style="margin-top:12px">
+            <span>Как представляется при первом сообщении (необязательно)</span>
+            <input name="bot_greeting" value="${esc(s.bot_greeting)}"
+              placeholder="Здравствуйте! Это Айгуль из С-Мұнай." ${admin ? '' : 'disabled'}>
+          </label>
+          ${admin
+            ? '<button class="btn btn--primary" style="margin-top:12px" type="submit">Сохранить</button>'
+            : '<p class="muted" style="margin-top:12px">Менять базу знаний может только администратор.</p>'}
+        </form>
+      </div>`;
+
+    if (!admin) return;
+    $('#botForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        await api('/settings', {
+          method: 'PUT',
+          body: { bot_knowledge: fd.get('bot_knowledge'), bot_greeting: fd.get('bot_greeting') },
+        });
+        toast('База знаний сохранена');
+        renderBot();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  }
 
   async function renderTeam() {
     const { items } = await api('/users');
