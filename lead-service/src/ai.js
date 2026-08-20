@@ -105,7 +105,7 @@ function toSteps(history, fallbackText) {
 export async function draftReply({ channel, history = [], text }) {
   if (!client) return null;
 
-  const interaction = await client.interactions.create({
+  const request = client.interactions.create({
     model: config.ai.model,
     // переписку клиентов у себя храним мы, у Google ей лежать незачем
     store: false,
@@ -117,10 +117,19 @@ export async function draftReply({ channel, history = [], text }) {
       schema: SCHEMA,
     },
     generation_config: {
-      // переписка с клиентом — не место для долгих раздумий, важнее скорость ответа
+      // переписка в мессенджере — не место для долгих раздумий, важнее скорость
       thinking_level: 'low',
     },
   });
+
+  // ждём модель ограниченное время: лучше сценарная фраза сразу,
+  // чем правильная через полминуты или повторная доставка вебхука
+  const interaction = await Promise.race([
+    request,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`модель не ответила за ${config.ai.timeoutMs} мс`)), config.ai.timeoutMs),
+    ),
+  ]);
 
   const raw = interaction.output_text;
   if (!raw) return null;

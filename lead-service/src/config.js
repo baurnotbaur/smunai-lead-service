@@ -77,9 +77,14 @@ export const config = {
   // сценарным: здоровается, просит телефон и зовёт менеджера.
   ai: {
     apiKey: process.env.GEMINI_API_KEY || '',
-    model: process.env.BOT_MODEL || 'gemini-3.7-flash',
+    // lite-модель отвечает за секунду-две вместо пятнадцати у старших, а на
+    // коротком ответе по готовой базе знаний разницы в качестве не видно
+    model: process.env.BOT_MODEL || 'gemini-3.5-flash-lite',
     // нестандартный адрес API — нужен, если запросы идут через прокси
     baseUrl: process.env.GEMINI_BASE_URL || '',
+    // сколько ждём модель, прежде чем ответить клиенту сценарной фразой:
+    // Meta повторяет доставку вебхука, если ответ долго не приходит
+    timeoutMs: Number(process.env.BOT_TIMEOUT_MS || 12000),
   },
 };
 

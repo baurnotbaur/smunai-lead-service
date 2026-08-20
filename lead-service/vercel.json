@@ -3,7 +3,7 @@
   "outputDirectory": "panel",
   "functions": {
     "api/index.js": {
-      "maxDuration": 15
+      "maxDuration": 60
     }
   },
   "rewrites": [
