@@ -34,6 +34,14 @@ export async function handlePublic(req, res, url) {
         db: config.tursoUrl ? 'turso' : 'file',
         persistent: !config.ephemeralDb,
         live: !config.serverless,
+        // что из каналов уже настроено — чтобы шаги подключения было видно снаружи,
+        // без секретов: только «задано или нет»
+        channels: {
+          webhook: Boolean(config.meta.verifyToken && config.meta.appSecret),
+          whatsapp: Boolean(config.meta.whatsapp.token && config.meta.whatsapp.phoneId),
+          instagram: Boolean(config.meta.instagram.token),
+          bot: config.ai.apiKey ? config.ai.model : 'сценарный',
+        },
         // текст ошибки нужен, чтобы понять причину отказа базы, не заглядывая в логи
         ...(dbError ? { error: 'db_unavailable', message: String(dbError.message || dbError) } : {}),
       },
