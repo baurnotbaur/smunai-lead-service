@@ -1,7 +1,6 @@
 import { db } from '../db.js';
 import { config } from '../config.js';
 import { createHash, randomBytes } from 'node:crypto';
-import nodemailer from 'nodemailer';
 import { json, readInput } from '../http.js';
 import {
   currentUser, createSession, sessionCookie, clearCookie,
@@ -256,24 +255,28 @@ export async function handleApi(req, res, url) {
 
     db.prepare('INSERT INTO password_resets (id, user_id, expires_at) VALUES (?, ?, ?)').run(hashedToken, row.id, expiresAt);
 
-    if (config.emailHost) {
+    const resetUrl = `${config.publicUrl}/admin/auth?token=${resetToken}`;
+    
+    if (config.telegramToken && config.telegramChatId) {
       try {
-        const transporter = nodemailer.createTransport({
-          host: config.emailHost, port: config.emailPort || 465, secure: config.emailPort == 465,
-          auth: { user: config.emailUser, pass: config.emailPass },
-        });
-        const resetUrl = `${config.publicUrl}/admin/auth?token=${resetToken}`;
-        await transporter.sendMail({
-          from: `"С-Мунай" <${config.emailFrom || 'noreply@s-munai.kz'}>`,
-          to: row.email,
-          subject: 'Сброс пароля панели администратора',
-          text: `Перейдите по ссылке (действительна 1 час): ${resetUrl}`,
+        const text = `🔐 <b>Сброс пароля</b>\n\nПоступил запрос на сброс пароля для пользователя: <b>${row.email}</b>.\n\nЕсли это вы, перейдите по ссылке (действительна 1 час):\n<a href="${resetUrl}">${resetUrl}</a>\n\n<i>Если вы не запрашивали сброс, просто проигнорируйте это сообщение.</i>`;
+        
+        await fetch(`https://api.telegram.org/bot${config.telegramToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: config.telegramChatId,
+            text,
+            parse_mode: 'HTML',
+            disable_web_page_preview: true,
+          }),
+          signal: AbortSignal.timeout(8000),
         });
       } catch (e) {
-        console.error('[email] send error:', e.message);
+        console.error('[telegram] send error:', e.message);
       }
     } else {
-      console.log(`[auth] No EMAIL_HOST in config. Reset URL for ${row.email}: ${config.publicUrl}/admin/auth?token=${resetToken}`);
+      console.log(`[auth] No TELEGRAM token in config. Reset URL for ${row.email}: ${resetUrl}`);
     }
     json(res, 200, { ok: true, message: 'If registered, a reset link has been sent.' });
     return true;
