@@ -814,11 +814,15 @@
               <dt>Создана</dt><dd>${fmtDate(lead.created_at)} <span class="muted">(${ago(lead.created_at)})</span></dd>
               <dt>Первый контакт</dt><dd>${lead.first_touch_at ? fmtDate(lead.first_touch_at) : '<span style="color:var(--red)">ещё не было</span>'}</dd>
               <dt>Канал</dt><dd>${channelName(lead) || 'Форма на сайте'}</dd>
+              
+              ${(state.user.role === 'admin' || state.user.role === 'senior') ? `
               <dt>Сайт</dt><dd>${esc(lead.site_name || '—')}</dd>
               <dt>Страница</dt><dd>${lead.page_url ? `<a href="${esc(lead.page_url)}" target="_blank" rel="noopener">${esc(lead.page_url)}</a>` : '—'}</dd>
               <dt>UTM</dt><dd class="mono">${esc([lead.utm_source, lead.utm_medium, lead.utm_campaign, lead.utm_content, lead.utm_term].filter(Boolean).join(' / ')) || '—'}</dd>
               <dt>Referrer</dt><dd class="mono">${esc(lead.referrer) || '—'}</dd>
               <dt>IP</dt><dd class="mono">${esc(lead.ip) || '—'}</dd>
+              ` : ''}
+
               ${Object.entries(extra).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}
             </dl>
           </div>
