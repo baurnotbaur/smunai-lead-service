@@ -39,8 +39,9 @@ export async function handlePublic(req, res, url) {
           instagram: Boolean(config.meta.instagram.token),
           bot: config.ai.apiKey ? config.ai.model : 'сценарный',
         },
-        // текст ошибки нужен, чтобы понять причину отказа базы, не заглядывая в логи
-        ...(dbError ? { error: 'db_unavailable', message: String(dbError.message || dbError) } : {}),
+        // наружу — только факт отказа базы, без текста ошибки (он мог бы выдать
+        // адрес/детали подключения); подробности остаются в серверных логах
+        ...(dbError ? { error: 'db_unavailable' } : {}),
       },
       cors(req),
     );
@@ -82,6 +83,11 @@ export async function handlePublic(req, res, url) {
   // honeypot: боты заполняют скрытое поле, люди — нет
   if (String(input._hp || '').trim()) {
     json(res, 200, { ok: true, id: 0, message: 'Заявка принята' }, cors(req));
+    return true;
+  }
+
+  if (input.extra?.data_consent !== true) {
+    json(res, 400, { ok: false, error: 'consent_required', message: 'Необходимо согласие на обработку данных' }, cors(req));
     return true;
   }
 
