@@ -1534,7 +1534,7 @@
               <tr style="cursor:default">
                 <td>${esc(u.name)}</td>
                 <td class="mono">${esc(u.email)}</td>
-                <td>${u.role === 'admin' ? 'Администратор' : 'Менеджер'}</td>
+                <td>${u.role === 'admin' ? 'Администратор' : (u.role === 'senior' || u.role === 'senior_manager' ? 'Старший менеджер' : 'Менеджер')}</td>
                 <td>${u.active ? '<span class="pill pill--won">активен</span>' : '<span class="pill pill--lost">отключён</span>'}</td>
                 ${isAdmin ? `<td class="nowrap">
                   <button class="btn btn--sm" data-user-toggle="${u.id}" data-active="${u.active}">${u.active ? 'Отключить' : 'Включить'}</button>
@@ -1553,7 +1553,7 @@
           <label class="field"><span>Email</span><input name="email" type="email" required></label>
           <label class="field"><span>Пароль (от 8 символов)</span><input name="password" type="password" minlength="8" required></label>
           <label class="field"><span>Роль</span>
-            <select name="role"><option value="manager">Менеджер</option><option value="admin">Администратор</option></select>
+            <select name="role"><option value="manager">Менеджер</option><option value="senior">Старший менеджер</option><option value="admin">Администратор</option></select>
           </label>
           <button class="btn btn--primary" type="submit">Создать</button>
         </form>
@@ -1679,7 +1679,20 @@
     $('#loginScreen').hidden = true;
     $('#app').hidden = false;
     $('#userName').textContent = state.user.name;
-    $('#userRole').textContent = state.user.role === 'admin' ? 'Администратор' : 'Менеджер';
+    
+    let roleName = 'Менеджер';
+    if (state.user.role === 'admin') roleName = 'Администратор';
+    if (state.user.role === 'senior' || state.user.role === 'senior_manager') roleName = 'Старший менеджер';
+    $('#userRole').textContent = roleName;
+
+    const isAdmin = state.user.role === 'admin';
+    const isSenior = state.user.role === 'senior' || state.user.role === 'senior_manager';
+    
+    $('[data-nav="stats"]').hidden = !(isAdmin || isSenior);
+    $('[data-nav="stages"]').hidden = !isAdmin;
+    $('[data-nav="sites"]').hidden = !isAdmin;
+    $('[data-nav="bot"]').hidden = !isAdmin;
+    $('[data-nav="team"]').hidden = !isAdmin;
 
     await route();
     refreshBadge();

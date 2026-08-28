@@ -327,6 +327,7 @@ export async function handleApi(req, res, url) {
   }
 
   const isAdmin = user.role === 'admin';
+  const isSenior = user.role === 'senior' || user.role === 'senior_manager';
   const denyNonAdmin = () => {
     json(res, 403, { ok: false, message: 'Недостаточно прав' });
     return true;
@@ -483,6 +484,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (p === '/api/stats' && req.method === 'GET') {
+    if (!isAdmin && !isSenior) return denyNonAdmin();
     json(res, 200, { ok: true, stats: stats() });
     return true;
   }
@@ -866,7 +868,7 @@ export async function handleApi(req, res, url) {
     }
     const info = db
       .prepare('INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)')
-      .run(email, name, hashPassword(password), body.role === 'admin' ? 'admin' : 'manager');
+      .run(email, name, hashPassword(password), body.role === 'admin' ? 'admin' : (body.role === 'senior' ? 'senior' : 'manager'));
     json(res, 201, { ok: true, id: Number(info.lastInsertRowid) });
     return true;
   }
@@ -888,7 +890,7 @@ export async function handleApi(req, res, url) {
       args.push(hashPassword(body.password));
     }
     if (isAdmin && 'active' in body) { sets.push('active = ?'); args.push(body.active ? 1 : 0); }
-    if (isAdmin && body.role) { sets.push('role = ?'); args.push(body.role === 'admin' ? 'admin' : 'manager'); }
+    if (isAdmin && body.role) { sets.push('role = ?'); args.push(body.role === 'admin' ? 'admin' : (body.role === 'senior' ? 'senior' : 'manager')); }
     if (!sets.length) {
       json(res, 400, { ok: false, message: 'Нечего менять' });
       return true;
