@@ -303,6 +303,7 @@ export async function handleApi(req, res, url) {
     }
     db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(body.newPassword), row.user_id);
     db.prepare('DELETE FROM password_resets WHERE id = ?').run(hashedToken);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(row.user_id);
     json(res, 200, { ok: true, message: 'Пароль успешно сброшен' });
     return true;
   }
@@ -423,6 +424,17 @@ export async function handleApi(req, res, url) {
         json(res, 404, { ok: false, error: 'not_found' });
         return true;
       }
+      
+      // Авторизация доступа к заявке
+      if (user.role === 'hr' && lead.type !== 'hr') {
+        json(res, 403, { ok: false, error: 'forbidden', message: 'HR может просматривать только HR-заявки' });
+        return true;
+      }
+      if (user.role !== 'hr' && user.role !== 'admin' && lead.type === 'hr') {
+        json(res, 403, { ok: false, error: 'forbidden', message: 'Менеджер не может просматривать HR-заявки' });
+        return true;
+      }
+
       const events = db
         .prepare(
           `SELECT e.*, u.name AS user_name FROM lead_events e
@@ -436,6 +448,20 @@ export async function handleApi(req, res, url) {
     if (req.method === 'PATCH' || req.method === 'PUT') {
       const body = await readInput(req);
       try {
+        const leadBefore = db.prepare(`SELECT type FROM leads WHERE id = ?`).get(id);
+        if (!leadBefore) {
+          json(res, 404, { ok: false, error: 'not_found' });
+          return true;
+        }
+        if (user.role === 'hr' && leadBefore.type !== 'hr') {
+          json(res, 403, { ok: false, error: 'forbidden' });
+          return true;
+        }
+        if (user.role !== 'hr' && user.role !== 'admin' && leadBefore.type === 'hr') {
+          json(res, 403, { ok: false, error: 'forbidden' });
+          return true;
+        }
+
         const lead = updateLead(id, body, user);
         if (!lead) {
           json(res, 404, { ok: false, error: 'not_found' });
@@ -458,6 +484,12 @@ export async function handleApi(req, res, url) {
   // ответ клиенту прямо из карточки — уходит в тот мессенджер, откуда он написал
   const replyMatch = p.match(/^\/api\/leads\/(\d+)\/reply$/);
   if (replyMatch && req.method === 'POST') {
+    const id = Number(replyMatch[1]);
+    const leadBefore = db.prepare(`SELECT type FROM leads WHERE id = ?`).get(id);
+    if (!leadBefore) { json(res, 404, { ok: false, error: 'not_found' }); return true; }
+    if (user.role === 'hr' && leadBefore.type !== 'hr') { json(res, 403, { ok: false }); return true; }
+    if (user.role !== 'hr' && user.role !== 'admin' && leadBefore.type === 'hr') { json(res, 403, { ok: false }); return true; }
+
     const body = await readInput(req);
     const text = clip(body.text, 4000);
     if (!text) {
@@ -465,9 +497,9 @@ export async function handleApi(req, res, url) {
       return true;
     }
     try {
-      const sent = await replyAsManager(Number(replyMatch[1]), text, user);
+      const sent = await replyAsManager(id, text, user);
       if (!sent) json(res, 404, { ok: false, error: 'not_found' });
-      else json(res, 200, { ok: true, messages: listMessages(Number(replyMatch[1])) });
+      else json(res, 200, { ok: true, messages: listMessages(id) });
     } catch (e) {
       json(res, e.status || 502, { ok: false, message: e.message });
     }
@@ -476,6 +508,12 @@ export async function handleApi(req, res, url) {
 
   const commentMatch = p.match(/^\/api\/leads\/(\d+)\/comments$/);
   if (commentMatch && req.method === 'POST') {
+    const id = Number(commentMatch[1]);
+    const leadBefore = db.prepare(`SELECT type FROM leads WHERE id = ?`).get(id);
+    if (!leadBefore) { json(res, 404, { ok: false, error: 'not_found' }); return true; }
+    if (user.role === 'hr' && leadBefore.type !== 'hr') { json(res, 403, { ok: false }); return true; }
+    if (user.role !== 'hr' && user.role !== 'admin' && leadBefore.type === 'hr') { json(res, 403, { ok: false }); return true; }
+
     const body = await readInput(req);
     const text = clip(body.text, 2000);
     if (!text) {
