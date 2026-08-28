@@ -1,11 +1,8 @@
 import { json, send, readInput, clientIp } from '../http.js';
 import { config } from '../config.js';
-import { createRateLimiter } from '../util.js';
+import { checkRateLimit } from '../ratelimit.js';
 import { dbError } from '../db.js';
 import { createLead, findSiteByKey, originAllowed } from '../leads.js';
-
-const perMinute = createRateLimiter({ limit: 20, windowMs: 60_000 });
-const perHour = createRateLimiter({ limit: 100, windowMs: 3_600_000 });
 
 function cors(req, extra = {}) {
   return {
@@ -59,7 +56,7 @@ export async function handlePublic(req, res, url) {
   if (url.pathname !== '/api/v1/leads' || req.method !== 'POST') return false;
 
   const ip = clientIp(req);
-  if (!perMinute(ip) || !perHour(ip)) {
+  if (!checkRateLimit(ip, 'public_lead', 10, 60)) {
     json(res, 429, { ok: false, error: 'rate_limited', message: 'Слишком много запросов, попробуйте позже' }, cors(req));
     return true;
   }

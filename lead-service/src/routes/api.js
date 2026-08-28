@@ -224,14 +224,22 @@ function toCsv(rows) {
   return '﻿' + lines.join('\r\n');
 }
 
+import { checkRateLimit } from '../ratelimit.js';
+
 /** @returns {boolean} обработан ли запрос */
 export async function handleApi(req, res, url) {
   const p = url.pathname;
   if (!p.startsWith('/api/')) return false;
 
+  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket?.remoteAddress || 'unknown';
+
   /* ---------- аутентификация ---------- */
 
   if (p === '/api/auth/login' && req.method === 'POST') {
+    if (!checkRateLimit(ip, 'login', 5, 15)) {
+      json(res, 429, { ok: false, message: 'Слишком много попыток. Попробуйте позже.' });
+      return true;
+    }
     const body = await readInput(req);
     const email = clip(body.email, 160).toLowerCase();
     const row = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(email);
@@ -249,6 +257,10 @@ export async function handleApi(req, res, url) {
   }
 
   if (p === '/api/auth/reset-password' && req.method === 'POST') {
+    if (!checkRateLimit(ip, 'reset_req', 3, 60)) {
+      json(res, 429, { ok: false, message: 'Слишком много попыток сброса. Попробуйте позже.' });
+      return true;
+    }
     const body = await readInput(req);
     const email = clip(body.email, 160).toLowerCase();
     const row = db.prepare('SELECT id, email FROM users WHERE email = ? AND active = 1').get(email);
@@ -290,6 +302,10 @@ export async function handleApi(req, res, url) {
   }
 
   if (p === '/api/auth/confirm-reset' && req.method === 'POST') {
+    if (!checkRateLimit(ip, 'reset_conf', 5, 60)) {
+      json(res, 429, { ok: false, message: 'Слишком много попыток.' });
+      return true;
+    }
     const body = await readInput(req);
     if (!body.token || !body.newPassword || String(body.newPassword).length < 8) {
       json(res, 400, { ok: false, message: 'Некорректный токен или пароль слишком короткий (мин 8 символов)' });

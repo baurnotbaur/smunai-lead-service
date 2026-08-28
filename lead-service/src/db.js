@@ -90,6 +90,12 @@ CREATE TABLE IF NOT EXISTS password_resets (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key        TEXT PRIMARY KEY,
+  hits       INTEGER NOT NULL DEFAULT 1,
+  expires_at TEXT NOT NULL
+);
+
 -- Подключённый сайт: источник заявок. Ключ вставляется в сниппет на сайте.
 CREATE TABLE IF NOT EXISTS sites (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
