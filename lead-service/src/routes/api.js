@@ -1,5 +1,7 @@
 import { db } from '../db.js';
 import { config } from '../config.js';
+import { createHash, randomBytes } from 'node:crypto';
+import nodemailer from 'nodemailer';
 import { json, readInput } from '../http.js';
 import {
   currentUser, createSession, sessionCookie, clearCookie,
@@ -237,6 +239,61 @@ export async function handleApi(req, res, url) {
       { ok: true, user: { id: row.id, name: row.name, email: row.email, role: row.role }, live: !config.serverless },
       { 'Set-Cookie': sessionCookie(s.id, s.expires) },
     );
+    return true;
+  }
+
+  if (p === '/api/auth/reset-password' && req.method === 'POST') {
+    const body = await readInput(req);
+    const email = clip(body.email, 160).toLowerCase();
+    const row = db.prepare('SELECT id, email FROM users WHERE email = ? AND active = 1').get(email);
+    if (!row) {
+      json(res, 200, { ok: true, message: 'If registered, a reset link has been sent.' });
+      return true;
+    }
+    const resetToken = randomBytes(32).toString('hex');
+    const hashedToken = createHash('sha256').update(resetToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 3600000).toISOString().replace('T', ' ').slice(0, 19);
+
+    db.prepare('INSERT INTO password_resets (id, user_id, expires_at) VALUES (?, ?, ?)').run(hashedToken, row.id, expiresAt);
+
+    if (config.emailHost) {
+      try {
+        const transporter = nodemailer.createTransport({
+          host: config.emailHost, port: config.emailPort || 465, secure: config.emailPort == 465,
+          auth: { user: config.emailUser, pass: config.emailPass },
+        });
+        const resetUrl = `${config.publicUrl}/admin/auth?token=${resetToken}`;
+        await transporter.sendMail({
+          from: `"С-Мунай" <${config.emailFrom || 'noreply@s-munai.kz'}>`,
+          to: row.email,
+          subject: 'Сброс пароля панели администратора',
+          text: `Перейдите по ссылке (действительна 1 час): ${resetUrl}`,
+        });
+      } catch (e) {
+        console.error('[email] send error:', e.message);
+      }
+    } else {
+      console.log(`[auth] No EMAIL_HOST in config. Reset URL for ${row.email}: ${config.publicUrl}/admin/auth?token=${resetToken}`);
+    }
+    json(res, 200, { ok: true, message: 'If registered, a reset link has been sent.' });
+    return true;
+  }
+
+  if (p === '/api/auth/confirm-reset' && req.method === 'POST') {
+    const body = await readInput(req);
+    if (!body.token || !body.newPassword || String(body.newPassword).length < 8) {
+      json(res, 400, { ok: false, message: 'Некорректный токен или пароль слишком короткий (мин 8 символов)' });
+      return true;
+    }
+    const hashedToken = createHash('sha256').update(body.token).digest('hex');
+    const row = db.prepare('SELECT user_id, expires_at FROM password_resets WHERE id = ?').get(hashedToken);
+    if (!row || new Date(row.expires_at.replace(' ', 'T') + 'Z') < new Date()) {
+      json(res, 400, { ok: false, message: 'Токен недействителен или устарел' });
+      return true;
+    }
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(body.newPassword), row.user_id);
+    db.prepare('DELETE FROM password_resets WHERE id = ?').run(hashedToken);
+    json(res, 200, { ok: true, message: 'Пароль успешно сброшен' });
     return true;
   }
 

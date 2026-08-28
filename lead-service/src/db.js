@@ -83,6 +83,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS password_resets (
+  id         TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Подключённый сайт: источник заявок. Ключ вставляется в сниппет на сайте.
 CREATE TABLE IF NOT EXISTS sites (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

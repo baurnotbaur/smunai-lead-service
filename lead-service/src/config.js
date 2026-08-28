@@ -86,6 +86,12 @@ export const config = {
     // Meta повторяет доставку вебхука, если ответ долго не приходит
     timeoutMs: Number(process.env.BOT_TIMEOUT_MS || 12000),
   },
+
+  emailHost: process.env.EMAIL_HOST || '',
+  emailPort: Number(process.env.EMAIL_PORT || 465),
+  emailUser: process.env.EMAIL_USER || '',
+  emailPass: process.env.EMAIL_PASS || '',
+  emailFrom: process.env.EMAIL_FROM || '',
 };
 
 if (config.sessionSecret === 'insecure-dev-secret-change-me') {
