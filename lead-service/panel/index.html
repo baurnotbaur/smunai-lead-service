@@ -20,11 +20,37 @@
       <input type="email" name="email" autocomplete="username" required>
     </label>
     <label class="field">
-      <span>Пароль</span>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Пароль</span>
+        <a href="#" id="forgotBtn" style="font-size:12px; color:var(--blue); text-decoration:none;">Забыли пароль?</a>
+      </div>
       <input type="password" name="password" autocomplete="current-password" required>
     </label>
     <button class="btn btn--primary" style="width:100%" type="submit">Войти</button>
     <p class="muted" id="loginError" style="color:var(--red);min-height:20px;margin:10px 0 0;font-size:13px"></p>
+  </form>
+
+  <form class="login__box card" id="forgotForm" hidden>
+    <div class="login__logo">Сброс</div>
+    <p class="muted" style="margin-top:0">Получить ссылку в Telegram</p>
+    <label class="field">
+      <span>Email</span>
+      <input type="email" name="email" required>
+    </label>
+    <button class="btn btn--primary" style="width:100%" type="submit">Отправить ссылку</button>
+    <a href="#" id="backToLoginBtn" style="display:block; text-align:center; margin-top:15px; font-size:13px; color:var(--muted);">Вернуться</a>
+    <p class="muted" id="forgotError" style="color:var(--red);min-height:20px;margin:10px 0 0;font-size:13px"></p>
+  </form>
+
+  <form class="login__box card" id="resetForm" hidden>
+    <div class="login__logo">Новый пароль</div>
+    <p class="muted" style="margin-top:0">Придумайте новый пароль</p>
+    <label class="field">
+      <span>Новый пароль (мин. 8 символов)</span>
+      <input type="password" name="newPassword" minlength="8" required>
+    </label>
+    <button class="btn btn--primary" style="width:100%" type="submit">Сохранить пароль</button>
+    <p class="muted" id="resetError" style="color:var(--red);min-height:20px;margin:10px 0 0;font-size:13px"></p>
   </form>
 </div>
 

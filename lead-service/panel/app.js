@@ -82,10 +82,75 @@
   function showLogin() {
     $('#app').hidden = true;
     $('#loginScreen').hidden = false;
+    
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    
+    if (token) {
+      $('#loginForm').hidden = true;
+      $('#resetForm').hidden = false;
+    } else {
+      $('#loginForm').hidden = false;
+      $('#resetForm').hidden = true;
+      $('#forgotForm').hidden = true;
+    }
+
     // без сессии поток событий всё равно отдаёт 401 — не переподключаемся вхолостую
     connectEvents._es?.close();
     connectEvents._es = null;
   }
+
+  $('#forgotBtn').addEventListener('click', (e) => {
+    e.preventDefault();
+    $('#loginForm').hidden = true;
+    $('#forgotForm').hidden = false;
+  });
+
+  $('#backToLoginBtn').addEventListener('click', (e) => {
+    e.preventDefault();
+    $('#forgotForm').hidden = true;
+    $('#loginForm').hidden = false;
+  });
+
+  $('#forgotForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button');
+    btn.disabled = true;
+    $('#forgotError').textContent = '';
+    try {
+      const email = new FormData(e.target).get('email');
+      const r = await api('/auth/reset-password', { method: 'POST', body: { email } });
+      $('#forgotError').style.color = 'var(--green)';
+      $('#forgotError').textContent = r.message || 'Ссылка отправлена';
+    } catch (err) {
+      $('#forgotError').style.color = 'var(--red)';
+      $('#forgotError').textContent = err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('#resetForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button');
+    btn.disabled = true;
+    $('#resetError').textContent = '';
+    try {
+      const newPassword = new FormData(e.target).get('newPassword');
+      const token = new URLSearchParams(window.location.search).get('token');
+      const r = await api('/auth/confirm-reset', { method: 'POST', body: { token, newPassword } });
+      $('#resetError').style.color = 'var(--green)';
+      $('#resetError').textContent = r.message || 'Успешно! Возврат на вход...';
+      setTimeout(() => {
+        window.history.replaceState({}, document.title, window.location.pathname);
+        showLogin();
+      }, 2000);
+    } catch (err) {
+      $('#resetError').style.color = 'var(--red)';
+      $('#resetError').textContent = err.message;
+      btn.disabled = false;
+    }
+  });
 
   $('#loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
