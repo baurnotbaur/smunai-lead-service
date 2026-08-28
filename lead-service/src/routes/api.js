@@ -1,7 +1,7 @@
 import { db } from '../db.js';
 import { config } from '../config.js';
 import { createHash, randomBytes } from 'node:crypto';
-import { json, readInput } from '../http.js';
+import { json, readInput, clientIp } from '../http.js';
 import {
   currentUser, createSession, sessionCookie, clearCookie,
   destroySession, verifyPassword, hashPassword,
@@ -22,6 +22,10 @@ import {
   listStages, codesOfKind, inClause, stageTitles,
   createStage, updateStage, deleteStage, reorderStages,
 } from '../stages.js';
+
+// Фиктивный хеш: прогоняем через него scrypt, когда пользователя нет, — чтобы
+// время ответа логина не выдавало, зарегистрирован email или нет.
+const DUMMY_PASSWORD_HASH = hashPassword(randomBytes(16).toString('hex'));
 
 const LEAD_COLUMNS = `
   l.*,
@@ -231,7 +235,7 @@ export async function handleApi(req, res, url) {
   const p = url.pathname;
   if (!p.startsWith('/api/')) return false;
 
-  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket?.remoteAddress || 'unknown';
+  const ip = clientIp(req) || 'unknown';
 
   /* ---------- аутентификация ---------- */
 
@@ -243,7 +247,10 @@ export async function handleApi(req, res, url) {
     const body = await readInput(req);
     const email = clip(body.email, 160).toLowerCase();
     const row = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(email);
-    if (!row || !verifyPassword(body.password || '', row.password_hash)) {
+    // scrypt считаем всегда — для несуществующего email по фиктивному хешу, —
+    // иначе по времени ответа можно перечислить зарегистрированные адреса.
+    const passOk = verifyPassword(body.password || '', row ? row.password_hash : DUMMY_PASSWORD_HASH);
+    if (!row || !passOk) {
       json(res, 401, { ok: false, message: 'Неверный email или пароль' });
       return true;
     }
@@ -631,8 +638,9 @@ export async function handleApi(req, res, url) {
     }
     const filters = JSON.parse(segment.filters || '{}');
     const format = url.searchParams.get('format') || 'meta';
-    // выгружаем без согласия только по явному требованию — ответственность на владельце базы
-    const consentOnly = url.searchParams.get('all') !== '1';
+    // выгрузку без согласия (all=1) вправе запросить только админ — это ПДн и
+    // юридический риск; рядовому менеджеру всегда только давшие согласие
+    const consentOnly = !(isAdmin && url.searchParams.get('all') === '1');
     const rows = audience(filters, { consentOnly });
     const preview = format === 'preview';
     const body = preview ? audiencePreviewCsv(rows) : audienceCsv(rows, format);
@@ -912,7 +920,11 @@ export async function handleApi(req, res, url) {
   /* ---------- сотрудники ---------- */
 
   if (p === '/api/users' && req.method === 'GET') {
-    const rows = db.prepare('SELECT id, email, name, role, active, created_at FROM users ORDER BY id').all();
+    // список нужен всем для назначения ответственных, но полный реестр с email и
+    // датами видит только руководство; рядовому менеджеру — лишь id/имя/роль
+    const rows = (isAdmin || isSenior)
+      ? db.prepare('SELECT id, email, name, role, active, created_at FROM users ORDER BY id').all()
+      : db.prepare('SELECT id, name, role, active FROM users WHERE active = 1 ORDER BY id').all();
     json(res, 200, { ok: true, items: rows });
     return true;
   }

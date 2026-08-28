@@ -52,8 +52,15 @@ export async function readInput(req) {
 }
 
 export function clientIp(req) {
-  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return fwd || req.socket.remoteAddress || '';
+  // На Vercel реальный IP клиента приходит в x-real-ip — его ставит платформа и
+  // подделать со стороны клиента нельзя. Левому значению x-forwarded-for НЕ
+  // доверяем: его задаёт сам клиент, а значит rate-limit обходился бы сменой
+  // заголовка. Локально прокси нет — берём адрес сокета.
+  if (process.env.VERCEL) {
+    const real = String(req.headers['x-real-ip'] || '').trim();
+    if (real) return real;
+  }
+  return req.socket?.remoteAddress || '';
 }
 
 export function serveStatic(res, rootDir, urlPath) {

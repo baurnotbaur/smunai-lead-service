@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomKey } from './util.js';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -49,11 +50,14 @@ export const config = {
   publicUrl: (process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 4000}`).replace(/\/+$/, ''),
   sessionSecret: process.env.SESSION_SECRET || 'insecure-dev-secret-change-me',
   adminEmail: process.env.ADMIN_EMAIL || 'admin@local',
-  adminPassword: process.env.ADMIN_PASSWORD || 'admin12345',
+  // В проде без явного ADMIN_PASSWORD не заводим известный дефолт: генерируем
+  // случайный (виден один раз в логе старта). Локально оставляем удобный дефолт.
+  adminPassword: process.env.ADMIN_PASSWORD || (serverless ? randomKey(18) : 'admin12345'),
   dbPath: path.resolve(ROOT, process.env.DB_PATH || defaultDb),
   telegramToken: process.env.TELEGRAM_BOT_TOKEN || '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
-  secureCookies: bool(process.env.SECURE_COOKIES, false),
+  // в проде (Vercel = HTTPS) кука сессии обязана быть Secure; локально по HTTP — нет
+  secureCookies: bool(process.env.SECURE_COOKIES, serverless),
 
   // WhatsApp и Instagram: оба канала идут через Meta и один общий вебхук
   meta: {
@@ -90,6 +94,14 @@ export const config = {
 
 if (config.sessionSecret === 'insecure-dev-secret-change-me') {
   console.warn('[warn] SESSION_SECRET не задан — используется дефолтный. Для прода задайте свой в .env');
+}
+
+if (serverless && !process.env.ADMIN_PASSWORD) {
+  console.warn(
+    '[warn] ADMIN_PASSWORD не задан в проде — пароль администратора случайный и виден только в этом логе. ' +
+      'Задайте ADMIN_EMAIL/ADMIN_PASSWORD в переменных окружения и подключите Turso, ' +
+      'иначе администратор пересоздаётся при каждом холодном старте.',
+  );
 }
 
 if (config.ephemeralDb) {
