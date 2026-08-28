@@ -1132,6 +1132,9 @@
   }
 
   async function renderMarketing() {
+    if (state.user.role !== 'admin' && state.user.role !== 'senior' && state.user.role !== 'senior_manager') {
+      return (view.innerHTML = `<div class="card"><div class="empty">Нет доступа</div></div>`);
+    }
     const { items } = await api('/segments');
 
     view.innerHTML = `
@@ -1714,7 +1717,7 @@
     const isHr = state.user.role === 'hr';
     
     $('[data-nav="stats"]').hidden = !(isAdmin || isSenior);
-    $('[data-nav="marketing"]').hidden = isHr;
+    $('[data-nav="marketing"]').hidden = !(isAdmin || isSenior);
     $('[data-nav="companies"]').hidden = isHr;
     $('[data-nav="stages"]').hidden = !isAdmin;
     $('[data-nav="sites"]').hidden = !isAdmin;
