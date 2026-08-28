@@ -28,6 +28,12 @@
   const esc = (s) =>
     String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  const waLink = (p) => {
+    let d = String(p || '').replace(/\D/g, '');
+    if (d.startsWith('8') && d.length === 11) d = '7' + d.slice(1);
+    return 'https://wa.me/' + d;
+  };
+
   const parseDate = (s) => (s ? new Date(String(s).replace(' ', 'T') + 'Z') : null);
 
   function fmtDate(s) {
@@ -619,7 +625,7 @@
           <h1 style="margin-top:6px">${esc(company.name)}</h1>
         </div>
         <div class="row">
-          ${company.phone ? `<a class="btn btn--primary btn--sm" href="tel:${esc(company.phone)}">Позвонить</a>` : ''}
+          ${company.phone ? `<a class="btn btn--primary btn--sm" href="${waLink(company.phone)}" target="_blank">Позвонить (WhatsApp)</a>` : ''}
           <a class="btn btn--sm" href="#/leads?company=${company.id}">Заявки компании</a>
         </div>
       </div>
@@ -636,7 +642,7 @@
                   <tr>
                     <td>${esc(c.name) || '<span class="muted">без имени</span>'}</td>
                     <td>${esc(c.position) || '<span class="muted">—</span>'}</td>
-                    <td class="mono nowrap">${c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>` : '—'}</td>
+                    <td class="mono nowrap">${c.phone ? `<a href="${waLink(c.phone)}" target="_blank">${esc(c.phone)}</a>` : '—'}</td>
                     <td class="mono">${esc(c.email) || '—'}</td>
                     <td class="nowrap">
                       ${c.unsubscribed
@@ -788,7 +794,7 @@
           <h1 style="margin-top:6px">${esc(lead.name || 'Без имени')} <span class="muted" style="font-weight:400">#${lead.id}</span></h1>
         </div>
         <div class="row">
-          ${lead.phone ? `<a class="btn btn--primary btn--sm" href="tel:${esc(lead.phone)}">Позвонить</a>` : ''}
+          ${lead.phone ? `<a class="btn btn--primary btn--sm" href="${waLink(lead.phone)}" target="_blank">Позвонить (WhatsApp)</a>` : ''}
           ${lead.email ? `<a class="btn btn--sm" href="mailto:${esc(lead.email)}">Написать</a>` : ''}
         </div>
       </div>
