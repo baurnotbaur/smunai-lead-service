@@ -280,11 +280,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_external ON messages(external_id)
   addColumn('contacts', 'consent_source', "TEXT NOT NULL DEFAULT ''");
   addColumn('contacts', 'unsubscribed', 'INTEGER NOT NULL DEFAULT 0');
 
+  addColumn('leads', 'type', "TEXT NOT NULL DEFAULT 'sales'");
+  addColumn('stages', 'type', "TEXT NOT NULL DEFAULT 'sales'");
+
   db.exec(`
   CREATE INDEX IF NOT EXISTS idx_leads_company ON leads(company_id);
   CREATE INDEX IF NOT EXISTS idx_leads_contact ON leads(contact_id);
   CREATE INDEX IF NOT EXISTS idx_leads_channel  ON leads(channel);
   CREATE INDEX IF NOT EXISTS idx_leads_external ON leads(channel, external_id);
+  CREATE INDEX IF NOT EXISTS idx_leads_type ON leads(type);
 `);
 
   // --- первичное наполнение ---------------------------------------------------
@@ -311,6 +315,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_external ON messages(external_id)
       ['won', 'Успех', 'won', 'won'],
       ['lost', 'Отказ', 'lost', 'lost'],
     ].forEach(([code, title, kind, color], i) => insert.run(code, title, kind, color, (i + 1) * 10));
+  }
+
+  const hrStageCount = db.prepare("SELECT COUNT(*) AS c FROM stages WHERE type = 'hr'").get().c;
+  if (hrStageCount === 0) {
+    const insert = db.prepare('INSERT INTO stages (code, title, kind, color, sort, type) VALUES (?,?,?,?,?,?)');
+    [
+      ['hr_new', 'Новое резюме', 'open', 'new', 'hr'],
+      ['hr_interview', 'Собеседование', 'open', 'in_work', 'hr'],
+      ['hr_offer', 'Оффер', 'open', 'callback', 'hr'],
+      ['hr_won', 'Принят', 'won', 'won', 'hr'],
+      ['hr_lost', 'Отказ', 'lost', 'lost', 'hr'],
+    ].forEach(([code, title, kind, color, type], i) => insert.run(code, title, kind, color, (i + 1) * 10, type));
   }
 
   const siteCount = db.prepare('SELECT COUNT(*) AS c FROM sites').get().c;

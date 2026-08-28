@@ -43,6 +43,13 @@ function buildFilters(url, user) {
   const where = [];
   const args = [];
 
+  let type = url.searchParams.get('type') || 'sales';
+  if (user.role === 'hr') type = 'hr';
+  else if (user.role !== 'admin') type = 'sales';
+  
+  where.push('l.type = ?');
+  args.push(type);
+
   const status = url.searchParams.get('status');
   if (status && status !== 'all') {
     const known = new Set(listStages().map((s) => s.code));
@@ -126,16 +133,16 @@ function stats() {
   const lost = inClause(codesOfKind('lost'));
   const open = inClause(codesOfKind('open'));
 
-  const byStatus = db.prepare('SELECT status, COUNT(*) AS c FROM leads GROUP BY status').all();
+  const byStatus = db.prepare("SELECT status, COUNT(*) AS c FROM leads WHERE type = 'sales' GROUP BY status").all();
   const counts = Object.fromEntries(stages.map((s) => [s.code, 0]));
   for (const r of byStatus) counts[r.status] = r.c;
 
-  const period = (expr) => db.prepare(`SELECT COUNT(*) AS c FROM leads WHERE created_at > datetime('now', ?)`).get(expr).c;
+  const period = (expr) => db.prepare(`SELECT COUNT(*) AS c FROM leads WHERE type = 'sales' AND created_at > datetime('now', ?)`).get(expr).c;
 
   const responseRow = db
     .prepare(
       `SELECT AVG((julianday(first_touch_at) - julianday(created_at)) * 24 * 60) AS avg_min
-         FROM leads WHERE first_touch_at IS NOT NULL AND created_at > datetime('now','-30 days')`,
+         FROM leads WHERE type = 'sales' AND first_touch_at IS NOT NULL AND created_at > datetime('now','-30 days')`,
     )
     .get();
 
@@ -143,7 +150,7 @@ function stats() {
   const overdue = db
     .prepare(
       `SELECT COUNT(*) AS c FROM leads l LEFT JOIN sites s ON s.id = l.site_id
-        WHERE l.first_touch_at IS NULL
+        WHERE l.type = 'sales' AND l.first_touch_at IS NULL
           AND l.status IN (${open.sql})
           AND l.created_at < datetime('now', '-' || COALESCE(s.sla_minutes, 15) || ' minutes')`,
     )
@@ -154,7 +161,7 @@ function stats() {
       `SELECT CASE WHEN utm_source = '' THEN 'прямой заход' ELSE utm_source END AS source,
               COUNT(*) AS total,
               SUM(status IN (${won.sql})) AS won
-         FROM leads WHERE created_at > datetime('now','-30 days')
+         FROM leads WHERE type = 'sales' AND created_at > datetime('now','-30 days')
         GROUP BY source ORDER BY total DESC LIMIT 10`,
     )
     .all(...won.args);
@@ -166,7 +173,7 @@ function stats() {
               SUM(l.status IN (${won.sql})) AS won,
               SUM(l.status IN (${open.sql})) AS open
          FROM users u LEFT JOIN leads l
-           ON l.assigned_to = u.id AND l.created_at > datetime('now','-30 days')
+           ON l.assigned_to = u.id AND l.created_at > datetime('now','-30 days') AND l.type = 'sales'
         WHERE u.active = 1
         GROUP BY u.id ORDER BY total DESC`,
     )
@@ -588,10 +595,14 @@ export async function handleApi(req, res, url) {
   /* ---------- воронка ---------- */
 
   if (p === '/api/stages' && req.method === 'GET') {
+    let type = url.searchParams.get('type') || 'sales';
+    if (user.role === 'hr') type = 'hr';
+    else if (user.role !== 'admin') type = 'sales';
+
     const counts = Object.fromEntries(
-      db.prepare('SELECT status, COUNT(*) AS c FROM leads GROUP BY status').all().map((r) => [r.status, r.c]),
+      db.prepare('SELECT status, COUNT(*) AS c FROM leads WHERE type = ? GROUP BY status').all(type).map((r) => [r.status, r.c]),
     );
-    json(res, 200, { ok: true, items: listStages().map((s) => ({ ...s, leads_count: counts[s.code] || 0 })) });
+    json(res, 200, { ok: true, items: listStages(type).map((s) => ({ ...s, leads_count: counts[s.code] || 0 })) });
     return true;
   }
 
@@ -869,7 +880,9 @@ export async function handleApi(req, res, url) {
     
     let newRole = 'manager';
     if (isAdmin) {
-      newRole = body.role === 'admin' ? 'admin' : (body.role === 'senior' ? 'senior' : 'manager');
+      if (body.role === 'admin') newRole = 'admin';
+      else if (body.role === 'senior') newRole = 'senior';
+      else if (body.role === 'hr') newRole = 'hr';
     }
     
     const info = db
@@ -896,7 +909,14 @@ export async function handleApi(req, res, url) {
       args.push(hashPassword(body.password));
     }
     if (isAdmin && 'active' in body) { sets.push('active = ?'); args.push(body.active ? 1 : 0); }
-    if (isAdmin && body.role) { sets.push('role = ?'); args.push(body.role === 'admin' ? 'admin' : (body.role === 'senior' ? 'senior' : 'manager')); }
+    if (isAdmin && body.role) {
+      let r = 'manager';
+      if (body.role === 'admin') r = 'admin';
+      else if (body.role === 'senior') r = 'senior';
+      else if (body.role === 'hr') r = 'hr';
+      sets.push('role = ?');
+      args.push(r);
+    }
     if (!sets.length) {
       json(res, 400, { ok: false, message: 'Нечего менять' });
       return true;

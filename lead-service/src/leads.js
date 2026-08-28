@@ -108,6 +108,8 @@ export function createLead(input, meta) {
     consent: input.consent ?? input.marketing_consent,
   });
 
+  const type = input.type === 'hr' ? 'hr' : 'sales';
+  
   const info = db
     .prepare(
       `INSERT INTO leads (
@@ -116,8 +118,8 @@ export function createLead(input, meta) {
          form_id, page_url, referrer,
          utm_source, utm_medium, utm_campaign, utm_content, utm_term,
          ip, user_agent, is_duplicate,
-         channel, external_id
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         channel, external_id, type
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       site?.id ?? null,
@@ -130,7 +132,7 @@ export function createLead(input, meta) {
       manager?.id ?? null,
       companyId,
       contactId,
-      startCode(),
+      startCode(type),
       clip(input.form_id ?? input.form, 60),
       clip(input.page_url ?? input.url, 500),
       clip(input.referrer ?? input.ref, 500),
@@ -144,6 +146,7 @@ export function createLead(input, meta) {
       dupe ? 1 : 0,
       meta.channel || 'site',
       clip(meta.externalId, 80),
+      type
     );
 
   const id = Number(info.lastInsertRowid);

@@ -4,19 +4,19 @@ import { clip } from './util.js';
 const KINDS = new Set(['open', 'won', 'lost']);
 const COLORS = new Set(['new', 'in_work', 'callback', 'won', 'lost']);
 
-export const listStages = () => db.prepare('SELECT * FROM stages WHERE active = 1 ORDER BY sort, id').all();
+export const listStages = (type = 'sales') => db.prepare('SELECT * FROM stages WHERE active = 1 AND type = ? ORDER BY sort, id').all(type);
 
 export const stageByCode = (code) => db.prepare('SELECT * FROM stages WHERE code = ?').get(code) || null;
 
 /** Коды стадий с нужным смыслом — для SQL вида `status IN (...)`. */
-export function codesOfKind(kind) {
-  return db.prepare('SELECT code FROM stages WHERE kind = ? AND active = 1').all(kind).map((r) => r.code);
+export function codesOfKind(kind, type = 'sales') {
+  return db.prepare('SELECT code FROM stages WHERE kind = ? AND active = 1 AND type = ?').all(kind, type).map((r) => r.code);
 }
 
 /** Первая стадия воронки: в неё попадают новые заявки. */
-export function startCode() {
-  const row = db.prepare("SELECT code FROM stages WHERE active = 1 AND kind = 'open' ORDER BY sort, id LIMIT 1").get();
-  return row?.code || 'new';
+export function startCode(type = 'sales') {
+  const row = db.prepare("SELECT code FROM stages WHERE active = 1 AND kind = 'open' AND type = ? ORDER BY sort, id LIMIT 1").get(type);
+  return row?.code || (type === 'hr' ? 'hr_new' : 'new');
 }
 
 /** Готовый кусок SQL `IN (?,?,?)` вместе со значениями. */
@@ -42,12 +42,13 @@ function nextCode(title) {
 export function createStage(input) {
   const title = clip(input.title, 60);
   if (!title) throw Object.assign(new Error('Укажите название стадии'), { status: 400 });
+  const type = input.type === 'hr' ? 'hr' : 'sales';
 
   const kind = KINDS.has(input.kind) ? input.kind : 'open';
-  const maxSort = db.prepare('SELECT COALESCE(MAX(sort), 0) AS m FROM stages').get().m;
+  const maxSort = db.prepare('SELECT COALESCE(MAX(sort), 0) AS m FROM stages WHERE type = ?').get(type).m;
   const info = db
-    .prepare('INSERT INTO stages (code, title, kind, color, sort) VALUES (?,?,?,?,?)')
-    .run(nextCode(title), title, kind, COLORS.has(input.color) ? input.color : 'new', maxSort + 10);
+    .prepare('INSERT INTO stages (code, title, kind, color, sort, type) VALUES (?,?,?,?,?,?)')
+    .run(nextCode(title), title, kind, COLORS.has(input.color) ? input.color : 'new', maxSort + 10, type);
   return db.prepare('SELECT * FROM stages WHERE id = ?').get(Number(info.lastInsertRowid));
 }
 

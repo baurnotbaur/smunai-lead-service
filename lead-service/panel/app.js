@@ -4,7 +4,7 @@
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const view = $('#view');
-  const state = { user: null, live: true, users: [], sites: [], stages: [], filters: {} };
+  const state = { user: null, live: true, users: [], sites: [], stages: [], filters: {}, appType: localStorage.getItem('appType') || 'sales' };
 
   /* ---------- стадии воронки ---------- */
   // Настраиваются в разделе «Воронка», поэтому берутся с сервера, а не из константы.
@@ -62,13 +62,19 @@
   }
 
   async function api(path, options = {}) {
-    const res = await fetch('/api' + path, {
+    let finalPath = path;
+    if (finalPath.startsWith('/leads') || finalPath.startsWith('/stages')) {
+      const sep = finalPath.includes('?') ? '&' : '?';
+      finalPath += `${sep}type=${state.appType}`;
+    }
+
+    const res = await fetch('/api' + finalPath, {
       credentials: 'same-origin',
       headers: options.body ? { 'Content-Type': 'application/json' } : {},
       ...options,
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
-    if (res.status === 401 && !path.startsWith('/auth')) {
+    if (res.status === 401 && !finalPath.startsWith('/auth')) {
       showLogin();
       throw new Error('unauthorized');
     }
@@ -1555,7 +1561,12 @@
           <label class="field"><span>Пароль (от 8 символов)</span><input name="password" type="password" minlength="8" required></label>
           ${isAdmin ? `
           <label class="field"><span>Роль</span>
-            <select name="role"><option value="manager">Менеджер</option><option value="senior">Старший менеджер</option><option value="admin">Администратор</option></select>
+            <select name="role">
+              <option value="manager">Менеджер</option>
+              <option value="hr">HR-менеджер</option>
+              <option value="senior">Старший менеджер</option>
+              <option value="admin">Администратор</option>
+            </select>
           </label>` : `<input type="hidden" name="role" value="manager">`}
           <button class="btn btn--primary" type="submit">Создать</button>
         </form>
@@ -1684,17 +1695,36 @@
     
     let roleName = 'Менеджер';
     if (state.user.role === 'admin') roleName = 'Администратор';
-    if (state.user.role === 'senior' || state.user.role === 'senior_manager') roleName = 'Старший менеджер';
+    else if (state.user.role === 'hr') roleName = 'HR-менеджер';
+    else if (state.user.role === 'senior' || state.user.role === 'senior_manager') roleName = 'Старший менеджер';
     $('#userRole').textContent = roleName;
 
     const isAdmin = state.user.role === 'admin';
     const isSenior = state.user.role === 'senior' || state.user.role === 'senior_manager';
+    const isHr = state.user.role === 'hr';
     
     $('[data-nav="stats"]').hidden = !(isAdmin || isSenior);
+    $('[data-nav="marketing"]').hidden = isHr;
+    $('[data-nav="companies"]').hidden = isHr;
     $('[data-nav="stages"]').hidden = !isAdmin;
     $('[data-nav="sites"]').hidden = !isAdmin;
     $('[data-nav="bot"]').hidden = !isAdmin;
     $('[data-nav="team"]').hidden = !(isAdmin || isSenior);
+
+    const switcher = $('#crmTypeSwitcher');
+    if (isAdmin) {
+      switcher.hidden = false;
+      switcher.value = state.appType;
+      switcher.onchange = async (e) => {
+        state.appType = e.target.value;
+        localStorage.setItem('appType', state.appType);
+        const [newStages] = await Promise.all([api('/stages')]);
+        state.stages = newStages.items;
+        route();
+      };
+    } else {
+      switcher.hidden = true;
+    }
 
     await route();
     refreshBadge();
