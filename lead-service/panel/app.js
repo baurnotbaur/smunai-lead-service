@@ -1523,6 +1523,7 @@
     const { items } = await api('/users');
     state.users = items;
     const isAdmin = state.user.role === 'admin';
+    const isSenior = state.user.role === 'senior' || state.user.role === 'senior_manager';
 
     view.innerHTML = `
       <div class="page-head"><h1>Сотрудники</h1></div>
@@ -1545,16 +1546,17 @@
         </table>
       </div>
 
-      ${isAdmin ? `
+      ${isAdmin || isSenior ? `
       <div class="card" style="max-width:420px">
         <h2 style="margin-bottom:12px">Добавить менеджера</h2>
         <form id="newUser">
           <label class="field"><span>Имя</span><input name="name" required></label>
           <label class="field"><span>Email</span><input name="email" type="email" required></label>
           <label class="field"><span>Пароль (от 8 символов)</span><input name="password" type="password" minlength="8" required></label>
+          ${isAdmin ? `
           <label class="field"><span>Роль</span>
             <select name="role"><option value="manager">Менеджер</option><option value="senior">Старший менеджер</option><option value="admin">Администратор</option></select>
-          </label>
+          </label>` : `<input type="hidden" name="role" value="manager">`}
           <button class="btn btn--primary" type="submit">Создать</button>
         </form>
       </div>` : ''}`;
@@ -1692,7 +1694,7 @@
     $('[data-nav="stages"]').hidden = !isAdmin;
     $('[data-nav="sites"]').hidden = !isAdmin;
     $('[data-nav="bot"]').hidden = !isAdmin;
-    $('[data-nav="team"]').hidden = !isAdmin;
+    $('[data-nav="team"]').hidden = !(isAdmin || isSenior);
 
     await route();
     refreshBadge();

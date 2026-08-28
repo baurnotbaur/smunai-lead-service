@@ -853,7 +853,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (p === '/api/users' && req.method === 'POST') {
-    if (!isAdmin) return denyNonAdmin();
+    if (!isAdmin && !isSenior) return denyNonAdmin();
     const body = await readInput(req);
     const email = clip(body.email, 160).toLowerCase();
     const name = clip(body.name, 120);
@@ -866,9 +866,15 @@ export async function handleApi(req, res, url) {
       json(res, 409, { ok: false, message: 'Такой email уже есть' });
       return true;
     }
+    
+    let newRole = 'manager';
+    if (isAdmin) {
+      newRole = body.role === 'admin' ? 'admin' : (body.role === 'senior' ? 'senior' : 'manager');
+    }
+    
     const info = db
       .prepare('INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)')
-      .run(email, name, hashPassword(password), body.role === 'admin' ? 'admin' : (body.role === 'senior' ? 'senior' : 'manager'));
+      .run(email, name, hashPassword(password), newRole);
     json(res, 201, { ok: true, id: Number(info.lastInsertRowid) });
     return true;
   }
