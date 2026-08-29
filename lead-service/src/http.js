@@ -66,7 +66,10 @@ export function clientIp(req) {
 export function serveStatic(res, rootDir, urlPath) {
   const rel = decodeURIComponent(urlPath.split('?')[0]).replace(/^\/+/, '');
   const file = path.resolve(rootDir, rel || 'index.html');
-  if (!file.startsWith(path.resolve(rootDir))) return send(res, 403, 'Forbidden');
+  if (!file.startsWith(path.resolve(rootDir))) {
+    send(res, 403, 'Forbidden');
+    return true;
+  }
   let st;
   try {
     st = statSync(file);

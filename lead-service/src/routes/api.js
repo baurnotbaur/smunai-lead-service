@@ -559,6 +559,11 @@ export async function handleApi(req, res, url) {
 
   /* ---------- маркетинг: сегменты и аудитории ---------- */
 
+  if (p.startsWith('/api/segments') && user.role !== 'admin') {
+    json(res, 403, { ok: false, error: 'forbidden' });
+    return true;
+  }
+
   if (p === '/api/segments' && req.method === 'GET') {
     const items = listSegments().map((s) => {
       const filters = JSON.parse(s.filters || '{}');
@@ -748,6 +753,18 @@ export async function handleApi(req, res, url) {
   const taskMatch = p.match(/^\/api\/tasks\/(\d+)$/);
   if (taskMatch) {
     const id = Number(taskMatch[1]);
+    
+    if (user.role !== 'admin') {
+      const t = db.prepare('SELECT l.type FROM tasks t LEFT JOIN leads l ON t.lead_id = l.id WHERE t.id = ?').get(id);
+      if (t && t.type) {
+        const allowedType = user.role === 'hr' ? 'hr' : 'sales';
+        if (t.type !== allowedType) {
+          json(res, 403, { ok: false, error: 'forbidden' });
+          return true;
+        }
+      }
+    }
+
     if (req.method === 'PATCH' || req.method === 'PUT') {
       const body = await readInput(req);
       try {
@@ -826,9 +843,13 @@ export async function handleApi(req, res, url) {
         return true;
       }
       const contacts = db.prepare('SELECT * FROM contacts WHERE company_id = ? ORDER BY id').all(id);
-      const leads = db
-        .prepare(`SELECT ${LEAD_COLUMNS} ${LEAD_FROM} WHERE l.company_id = ? ORDER BY l.created_at DESC LIMIT 100`)
-        .all(id);
+      const leadsQuery = user.role === 'admin'
+        ? `SELECT ${LEAD_COLUMNS} ${LEAD_FROM} WHERE l.company_id = ? ORDER BY l.created_at DESC LIMIT 100`
+        : `SELECT ${LEAD_COLUMNS} ${LEAD_FROM} WHERE l.company_id = ? AND l.type = ? ORDER BY l.created_at DESC LIMIT 100`;
+      
+      const leadsArgs = user.role === 'admin' ? [id] : [id, user.role === 'hr' ? 'hr' : 'sales'];
+      const leads = db.prepare(leadsQuery).all(...leadsArgs);
+      
       json(res, 200, { ok: true, company, contacts, leads });
       return true;
     }

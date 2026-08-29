@@ -15,6 +15,10 @@ import { handleApi } from './routes/api.js';
 const PANEL_DIR = path.join(ROOT, 'panel');
 
 export async function handleRequest(req, res) {
+  if (req.url.includes('..') || req.url.toLowerCase().includes('%2e')) {
+    send(res, 403, 'Forbidden');
+    return;
+  }
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
   try {

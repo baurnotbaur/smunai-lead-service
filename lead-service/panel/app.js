@@ -804,9 +804,9 @@
           <div class="card">
             <h2 style="margin-bottom:12px">Контакт и источник</h2>
             <dl class="kv">
-              <dt>Компания</dt><dd>${lead.company_id
+              ${state.user.role !== 'hr' ? `<dt>Компания</dt><dd>${lead.company_id
                 ? `<a href="#/company/${lead.company_id}">${esc(lead.company_name)}</a>`
-                : '<span class="muted">не определена</span>'}</dd>
+                : '<span class="muted">не определена</span>'}</dd>` : ''}
               <dt>Контакт</dt><dd>${esc(lead.contact_name) || '<span class="muted">—</span>'}</dd>
               <dt>Телефон</dt><dd class="mono">${esc(lead.phone) || '—'}</dd>
               <dt>Email</dt><dd class="mono">${esc(lead.email) || '—'}</dd>
@@ -1009,7 +1009,8 @@
     if (phone === null) return;
     const comment = prompt('Комментарий (необязательно):') || '';
     try {
-      await api('/leads', { method: 'POST', body: { name, phone, comment } });
+      const type = state.user.role === 'hr' ? 'hr' : 'sales';
+      await api('/leads', { method: 'POST', body: { name, phone, comment, type } });
       toast('Заявка добавлена');
       renderLeads();
     } catch (err) {
@@ -1719,6 +1720,7 @@
     $('[data-nav="stats"]').hidden = !(isAdmin || isSenior);
     $('[data-nav="marketing"]').hidden = !(isAdmin || isSenior);
     $('[data-nav="companies"]').hidden = isHr;
+    $('[data-nav="board"]').hidden = isHr;
     $('[data-nav="stages"]').hidden = !isAdmin;
     $('[data-nav="sites"]').hidden = !isAdmin;
     $('[data-nav="bot"]').hidden = !isAdmin;
