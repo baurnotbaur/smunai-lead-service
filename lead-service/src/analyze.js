@@ -216,6 +216,8 @@ export async function analyzeLead(leadId) {
     'ai',
     `Оценка ИИ: ${score}/10${tags.length ? ' · ' + tags.join(', ') : ''}`,
   );
+  // единственный след успешной оценки в логах хостинга — по нему видно, что фича жива
+  console.log(`[ai] заявка ${leadId} оценена: ${score}/10${tags.length ? ' · ' + tags.join(', ') : ''}`);
 
   const updated = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
   broadcast('lead:update', { id: leadId, status: updated.status, by: 0 });
