@@ -89,6 +89,15 @@ export const config = {
     // сколько ждём модель, прежде чем ответить клиенту сценарной фразой:
     // Meta повторяет доставку вебхука, если ответ долго не приходит
     timeoutMs: Number(process.env.BOT_TIMEOUT_MS || 12000),
+    // Оценка заявок — на старшей flash: lite на длинном структурированном ответе
+    // замерена в 90–110 секунд против стабильных ~10 у flash (сентябрь 2026).
+    analyzeModel: process.env.AI_LEAD_MODEL || 'gemini-3.5-flash',
+    // предел одной попытки оценки; попыток две (см. analyze.js), и обе вместе
+    // должны укладываться в maxDuration функции Vercel (60 с в vercel.json)
+    analyzeTimeoutMs: Number(process.env.AI_ANALYZE_TIMEOUT_MS || 25000),
+    // предохранитель расходов: больше стольких автоматических оценок в сутки
+    // не делаем, даже если формы заливает бот со сменой IP
+    dailyLimit: Number(process.env.AI_DAILY_LIMIT || 300),
   },
 };
 

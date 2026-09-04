@@ -10,6 +10,8 @@ import { createLead } from './leads.js';
 import { codesOfKind } from './stages.js';
 import { send, canReply, replyToComment } from './channels/meta.js';
 import { draftReply, aiEnabled } from './ai.js';
+import { notifyNewLead } from './notify.js';
+import { afterResponse } from './defer.js';
 import { broadcast } from './events.js';
 
 const CHANNELS = { whatsapp: 'WhatsApp', instagram: 'Instagram' };
@@ -134,6 +136,8 @@ export async function handleMessage(incoming) {
     );
     if (!result.ok) return { leadId: 0, isNew: false, replied: false, skipped: result.error };
     lead = result.lead;
+    // вебхук Meta ждёт ответа 200 — доставку уведомления доводим после ответа
+    afterResponse(notifyNewLead(lead, null, result.manager));
   }
 
   saveMessage({ leadId: lead.id, channel, direction: 'in', kind, text, messageId });

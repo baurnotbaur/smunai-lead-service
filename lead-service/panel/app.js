@@ -4,7 +4,7 @@
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const view = $('#view');
-  const state = { user: null, live: true, users: [], sites: [], stages: [], filters: {}, appType: localStorage.getItem('appType') || 'sales' };
+  const state = { user: null, live: true, ai: false, users: [], sites: [], stages: [], filters: {}, appType: localStorage.getItem('appType') || 'sales' };
 
   /* ---------- стадии воронки ---------- */
   // Настраиваются в разделе «Воронка», поэтому берутся с сервера, а не из константы.
@@ -22,6 +22,26 @@
   const CHANNELS = { whatsapp: 'WhatsApp', instagram: 'Instagram' };
   const channelName = (lead) => CHANNELS[lead?.channel] || '';
   const isChat = (lead) => Boolean(channelName(lead) && lead.external_id);
+
+  /* ---------- оценка ИИ ---------- */
+  // Сервис оценивает заявку сам при поступлении; здесь только отображение
+  // и кнопка «оценить заново» в карточке.
+
+  const aiTags = (l) => {
+    try {
+      return JSON.parse(l.ai_tags || '[]');
+    } catch {
+      return [];
+    }
+  };
+  const aiScoreClass = (n) => (n >= 8 ? 'hot' : n >= 5 ? 'warm' : 'cold');
+  const aiScorePill = (l) => l.ai_score
+    ? `<span class="pill pill--ai-${aiScoreClass(l.ai_score)}" title="Оценка ИИ">ИИ ${l.ai_score}/10</span>`
+    : '';
+  const aiTagClass = (t) =>
+    t === 'Спам' || t === 'Сомнительно' ? ' pill--ai-tag--warn' : t === 'Срочно' ? ' pill--ai-tag--hot' : '';
+  const aiTagPills = (l) =>
+    aiTags(l).map((t) => `<span class="pill pill--ai-tag${aiTagClass(t)}">${esc(t)}</span>`).join(' ');
 
   /* ---------- утилиты ---------- */
 
@@ -172,6 +192,7 @@
       const r = await api('/auth/login', { method: 'POST', body: { email: fd.get('email'), password: fd.get('password') } });
       state.user = r.user;
       state.live = r.live !== false;
+      state.ai = r.ai === true;
       e.target.reset();
       await boot();
     } catch (err) {
@@ -275,12 +296,16 @@
         <select id="fsite">${opts(state.sites.map((s) => ({ v: s.id, t: s.name })), f.site, 'Все сайты')}</select>
         <input type="date" id="ffrom" value="${esc(f.from || '')}" title="Заявки с даты">
         <input type="date" id="fto" value="${esc(f.to || '')}" title="Заявки по дату">
+        <select id="fsort" title="Порядок">
+          <option value="">Сначала новые</option>
+          <option value="ai"${f.sort === 'ai' ? ' selected' : ''}>Сначала горячие (ИИ)</option>
+        </select>
         <button class="btn btn--sm" id="fReset">Сбросить</button>
       </div>`;
   }
 
   function bindFilters(reload) {
-    const map = { fq: 'q', fstatus: 'status', fassigned: 'assigned', fsite: 'site', ffrom: 'from', fto: 'to' };
+    const map = { fq: 'q', fstatus: 'status', fassigned: 'assigned', fsite: 'site', ffrom: 'from', fto: 'to', fsort: 'sort' };
     for (const [id, key] of Object.entries(map)) {
       const el = $('#' + id);
       if (!el) continue;
@@ -367,8 +392,11 @@
           <span class="mono">${esc(l.phone || l.email)}</span>
           ${l.is_duplicate ? ' <span class="pill pill--dupe">дубль</span>' : ''}
         </td>
-        <td style="max-width:280px">${esc(l.comment).slice(0, 140) || '<span class="muted">—</span>'}</td>
-        <td class="nowrap">${statusPill(l.status)} ${isOverdue(l) ? '<span class="pill pill--overdue">просрочка</span>' : ''}</td>
+        <td style="max-width:280px">
+          ${esc(l.comment).slice(0, 140) || '<span class="muted">—</span>'}
+          ${aiTags(l).length ? `<div style="margin-top:4px">${aiTagPills(l)}</div>` : ''}
+        </td>
+        <td class="nowrap">${statusPill(l.status)} ${aiScorePill(l)} ${isOverdue(l) ? '<span class="pill pill--overdue">просрочка</span>' : ''}</td>
         <td class="nowrap">${esc(l.assigned_name || '—')}</td>
         <td class="nowrap muted" style="font-size:12px">
           ${esc(channelName(l) || l.utm_source || l.site_name || '—')}${l.utm_campaign ? '<br>' + esc(l.utm_campaign) : ''}
@@ -389,6 +417,7 @@
             <div class="board__card" draggable="true" data-id="${l.id}">
               <b>${esc(l.name || 'Без имени')}</b>
               <span class="mono">${esc(l.phone || l.email)}</span>
+              ${l.ai_score ? `<div style="margin-top:5px">${aiScorePill(l)} ${aiTagPills(l)}</div>` : ''}
               <div class="muted" style="font-size:12px;margin-top:6px">
                 ${ago(l.created_at)}${l.assigned_name ? ' · ' + esc(l.assigned_name) : ''}
                 ${isOverdue(l) ? ' · <span style="color:var(--red)">просрочка</span>' : ''}
@@ -801,6 +830,28 @@
 
       <div class="lead-grid">
         <div class="grid">
+          ${lead.ai_at || state.ai ? `
+          <div class="card">
+            <div class="spread" style="margin-bottom:12px">
+              <h2>Оценка ИИ ${aiScorePill(lead)}</h2>
+              ${state.ai ? `<button class="btn btn--sm" id="aiAnalyze">${lead.ai_at ? 'Оценить заново' : 'Оценить'}</button>` : ''}
+            </div>
+            ${lead.ai_at ? `
+              ${aiTags(lead).length ? `<div class="row row--wrap" style="gap:6px;margin-bottom:10px">${aiTagPills(lead)}</div>` : ''}
+              ${lead.ai_summary ? `<p style="margin:0 0 12px">${esc(lead.ai_summary)}</p>` : ''}
+              ${lead.ai_draft ? `
+                <div class="muted" style="font-size:12px;margin-bottom:5px">Черновик первого сообщения — проверьте, поправьте и отправьте клиенту:</div>
+                <textarea id="aiDraft" rows="4">${esc(lead.ai_draft)}</textarea>
+                <div class="row" style="margin-top:8px">
+                  <button class="btn btn--sm" id="aiCopy">Копировать</button>
+                  ${lead.phone ? `<a class="btn btn--sm" href="${waLink(lead.phone)}" target="_blank">Открыть WhatsApp</a>` : ''}
+                </div>` : ''}
+              <div class="muted" style="font-size:11px;margin-top:10px">
+                Оценку сделал ИИ (${fmtDate(lead.ai_at)}), он может ошибаться — решение за менеджером.
+              </div>
+            ` : '<p class="muted" style="margin:0">Эта заявка ещё не оценивалась.</p>'}
+          </div>` : ''}
+
           <div class="card">
             <h2 style="margin-bottom:12px">Контакт и источник</h2>
             <dl class="kv">
@@ -878,7 +929,7 @@
             </form>
             <ul class="timeline">
               ${events.map((e) => `
-                <li class="${e.type === 'comment' ? 'comment' : ''}">
+                <li class="${e.type === 'comment' ? 'comment' : e.type === 'ai' ? 'ai' : ''}">
                   <div>${esc(e.text)}</div>
                   <div class="when">${fmtDate(e.created_at)}${e.user_name ? ' · ' + esc(e.user_name) : ''}</div>
                 </li>`).reverse().join('')}
@@ -913,6 +964,25 @@
           ${state.user.role === 'admin' ? '<button class="btn btn--danger btn--sm" id="delLead" style="width:100%;margin-top:8px">Удалить заявку</button>' : ''}
         </div>
       </div>`;
+
+    $('#aiAnalyze')?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      e.target.textContent = 'Оцениваю…';
+      try {
+        await api(`/leads/${id}/analyze`, { method: 'POST' });
+        toast('Оценка готова');
+        renderLead(id);
+      } catch (err) {
+        toast(err.message, true);
+        e.target.disabled = false;
+        e.target.textContent = 'Оценить заново';
+      }
+    });
+
+    $('#aiCopy')?.addEventListener('click', () => {
+      navigator.clipboard.writeText($('#aiDraft').value);
+      toast('Черновик скопирован — вставьте его в WhatsApp');
+    });
 
     $('#setStatus').addEventListener('change', (e) => {
       $('#lostWrap').hidden = !isLostStage(e.target.value);
@@ -1759,6 +1829,7 @@
     .then((r) => {
       state.user = r.user;
       state.live = r.live !== false;
+      state.ai = r.ai === true;
       return boot();
     })
     .catch(showLogin);

@@ -289,12 +289,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_external ON messages(external_id)
   addColumn('leads', 'type', "TEXT NOT NULL DEFAULT 'sales'");
   addColumn('stages', 'type', "TEXT NOT NULL DEFAULT 'sales'");
 
+  // оценка заявки ИИ: балл 1–10 (NULL = ещё не оценивалась), теги (JSON-массив),
+  // конспект для менеджера и черновик первого сообщения клиенту
+  addColumn('leads', 'ai_score', 'INTEGER');
+  addColumn('leads', 'ai_tags', "TEXT NOT NULL DEFAULT ''");
+  addColumn('leads', 'ai_summary', "TEXT NOT NULL DEFAULT ''");
+  addColumn('leads', 'ai_draft', "TEXT NOT NULL DEFAULT ''");
+  addColumn('leads', 'ai_at', 'TEXT');
+
   db.exec(`
   CREATE INDEX IF NOT EXISTS idx_leads_company ON leads(company_id);
   CREATE INDEX IF NOT EXISTS idx_leads_contact ON leads(contact_id);
   CREATE INDEX IF NOT EXISTS idx_leads_channel  ON leads(channel);
   CREATE INDEX IF NOT EXISTS idx_leads_external ON leads(channel, external_id);
   CREATE INDEX IF NOT EXISTS idx_leads_type ON leads(type);
+  CREATE INDEX IF NOT EXISTS idx_leads_ai_score ON leads(ai_score);
 `);
 
   // --- первичное наполнение ---------------------------------------------------

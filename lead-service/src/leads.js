@@ -1,7 +1,6 @@
 import { db } from './db.js';
 import { clip, normalizePhone, isEmail } from './util.js';
 import { stageByCode, stageTitles, startCode } from './stages.js';
-import { notifyNewLead } from './notify.js';
 import { broadcast } from './events.js';
 import { linkLeadParties } from './crm.js';
 
@@ -53,7 +52,9 @@ const KNOWN_FIELDS = new Set([
 
 /**
  * Принимает сырые данные формы, валидирует и сохраняет заявку.
- * @returns {{ok: true, lead: object} | {ok: false, error: string, message: string}}
+ * Уведомления не шлёт — это делает вызывающая сторона, когда заявка полностью
+ * готова (например, после оценки ИИ, чтобы в Telegram сразу был балл).
+ * @returns {{ok: true, lead: object, manager: object | null} | {ok: false, error: string, message: string}}
  */
 export function createLead(input, meta) {
   const site = meta.site;
@@ -165,7 +166,6 @@ export function createLead(input, meta) {
   }
 
   const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
-  notifyNewLead(lead, site, manager);
   broadcast('lead:new', {
     id: lead.id,
     name: lead.name,
@@ -173,7 +173,7 @@ export function createLead(input, meta) {
     site: site?.name || '',
     is_duplicate: lead.is_duplicate,
   });
-  return { ok: true, lead };
+  return { ok: true, lead, manager: manager || null };
 }
 
 /** Смена статуса/ответственного/суммы с записью в историю. */

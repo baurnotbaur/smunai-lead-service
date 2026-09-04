@@ -17,6 +17,9 @@ import { subscribe } from '../events.js';
 import { listMessages, replyAsManager } from '../conversations.js';
 import { allSettings, setSetting, knowledgeLooksUnfilled } from '../settings.js';
 import { aiEnabled } from '../ai.js';
+import { analyzeLead, analysisEnabled } from '../analyze.js';
+import { notifyNewLead } from '../notify.js';
+import { afterResponse } from '../defer.js';
 import { clip, randomKey, isEmail } from '../util.js';
 import {
   listStages, codesOfKind, inClause, stageTitles,
@@ -123,8 +126,13 @@ function listLeads(url, user) {
   const limit = Math.min(Number(url.searchParams.get('limit') || 50), 500);
   const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
 
+  // «сначала горячие»: по оценке ИИ, неоценённые — в конец
+  const order = url.searchParams.get('sort') === 'ai'
+    ? 'ORDER BY (l.ai_score IS NULL), l.ai_score DESC, l.created_at DESC, l.id DESC'
+    : 'ORDER BY l.created_at DESC, l.id DESC';
+
   const rows = db
-    .prepare(`SELECT ${LEAD_COLUMNS} ${LEAD_FROM} ${sql} ORDER BY l.created_at DESC, l.id DESC LIMIT ? OFFSET ?`)
+    .prepare(`SELECT ${LEAD_COLUMNS} ${LEAD_FROM} ${sql} ${order} LIMIT ? OFFSET ?`)
     .all(...args, limit, offset);
   const total = db.prepare(`SELECT COUNT(*) AS c ${LEAD_FROM} ${sql}`).get(...args).c;
 
@@ -215,14 +223,22 @@ function toCsv(rows) {
   const head = [
     'ID', 'Дата', 'Имя', 'Телефон', 'Email', 'Комментарий', 'Статус',
     'Ответственный', 'Сайт', 'Источник', 'Кампания', 'Страница', 'Сумма',
+    'Оценка ИИ', 'Теги ИИ',
   ];
   const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const tags = (r) => {
+    try {
+      return JSON.parse(r.ai_tags || '[]').join(', ');
+    } catch {
+      return '';
+    }
+  };
   const lines = [head.map(esc).join(';')];
   for (const r of rows) {
     lines.push([
       r.id, r.created_at, r.name, r.phone, r.email, r.comment, STATUSES[r.status] || r.status,
       r.assigned_name || '', r.site_name || '', r.utm_source, r.utm_campaign, r.page_url,
-      r.amount ?? '',
+      r.amount ?? '', r.ai_score ?? '', tags(r),
     ].map(esc).join(';'));
   }
   return '﻿' + lines.join('\r\n');
@@ -257,7 +273,12 @@ export async function handleApi(req, res, url) {
     const s = await createSession(db, row.id);
     json(
       res, 200,
-      { ok: true, user: { id: row.id, name: row.name, email: row.email, role: row.role }, live: !config.serverless },
+      {
+        ok: true,
+        user: { id: row.id, name: row.name, email: row.email, role: row.role },
+        live: !config.serverless,
+        ai: analysisEnabled(),
+      },
       { 'Set-Cookie': sessionCookie(s.id, s.expires) },
     );
     return true;
@@ -366,7 +387,7 @@ export async function handleApi(req, res, url) {
 
   if (p === '/api/me') {
     // live=false — панель не станет открывать поток событий и обойдётся без живых обновлений
-    json(res, 200, { ok: true, user, live: !config.serverless });
+    json(res, 200, { ok: true, user, live: !config.serverless, ai: analysisEnabled() });
     return true;
   }
 
@@ -422,6 +443,7 @@ export async function handleApi(req, res, url) {
       return true;
     }
     db.prepare('UPDATE leads SET assigned_to = COALESCE(assigned_to, ?) WHERE id = ?').run(user.id, result.lead.id);
+    afterResponse(notifyNewLead(result.lead, null, result.manager));
     json(res, 201, { ok: true, lead: result.lead });
     return true;
   }
@@ -502,6 +524,33 @@ export async function handleApi(req, res, url) {
       json(res, 200, { ok: true });
       return true;
     }
+  }
+
+  // оценка ИИ по кнопке из карточки: для старых заявок и повторной оценки
+  const analyzeMatch = p.match(/^\/api\/leads\/(\d+)\/analyze$/);
+  if (analyzeMatch && req.method === 'POST') {
+    const id = Number(analyzeMatch[1]);
+    const leadBefore = db.prepare('SELECT type FROM leads WHERE id = ?').get(id);
+    if (!leadBefore) { json(res, 404, { ok: false, error: 'not_found' }); return true; }
+    if (user.role === 'hr' && leadBefore.type !== 'hr') { json(res, 403, { ok: false }); return true; }
+    if (user.role !== 'hr' && user.role !== 'admin' && leadBefore.type === 'hr') { json(res, 403, { ok: false }); return true; }
+
+    if (!analysisEnabled()) {
+      json(res, 503, { ok: false, message: 'ИИ не подключён: задайте GEMINI_API_KEY и перезапустите сервис' });
+      return true;
+    }
+    if (!checkRateLimit(ip, 'ai_analyze', 20, 10)) {
+      json(res, 429, { ok: false, message: 'Слишком много запросов оценки, подождите немного' });
+      return true;
+    }
+    try {
+      const lead = await analyzeLead(id);
+      if (!lead) json(res, 502, { ok: false, message: 'Модель не ответила, попробуйте ещё раз' });
+      else json(res, 200, { ok: true, lead });
+    } catch (e) {
+      json(res, 502, { ok: false, message: 'Оценка не получилась: ' + e.message });
+    }
+    return true;
   }
 
   // ответ клиенту прямо из карточки — уходит в тот мессенджер, откуда он написал

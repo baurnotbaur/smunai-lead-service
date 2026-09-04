@@ -3,6 +3,9 @@ import { config } from '../config.js';
 import { checkRateLimit } from '../ratelimit.js';
 import { dbError } from '../db.js';
 import { createLead, findSiteByKey, originAllowed } from '../leads.js';
+import { analyzeLead, analysisEnabled } from '../analyze.js';
+import { notifyNewLead } from '../notify.js';
+import { afterResponse } from '../defer.js';
 
 function cors(req, extra = {}) {
   return {
@@ -13,6 +16,26 @@ function cors(req, extra = {}) {
     Vary: 'Origin',
     ...extra,
   };
+}
+
+/**
+ * Куда вернуть посетителя после обычной <form> без JS. Абсолютный адрес
+ * принимаем только на домены, разрешённые в карточке сайта, — иначе форма
+ * работала бы открытым редиректом для фишинга «с доверенного домена».
+ * Относительный путь безопасен всегда; на всё остальное — назад на referer.
+ */
+function safeRedirect(site, redirect, referer) {
+  const target = String(redirect || '').trim();
+  if (target.startsWith('/') && !target.startsWith('//') && !target.includes('\\')) return target;
+  try {
+    const url = new URL(target);
+    if (/^https?:$/.test(url.protocol) && site.domains.trim() && originAllowed(site, url.origin)) {
+      return url.href;
+    }
+  } catch {
+    /* не адрес — игнорируем */
+  }
+  return referer || '/';
 }
 
 /** @returns {boolean} обработан ли запрос */
@@ -38,6 +61,7 @@ export async function handlePublic(req, res, url) {
           whatsapp: Boolean(config.meta.whatsapp.token && config.meta.whatsapp.phoneId),
           instagram: Boolean(config.meta.instagram.token),
           bot: config.ai.apiKey ? config.ai.model : 'сценарный',
+          lead_ai: analysisEnabled() ? config.ai.analyzeModel : 'выключена',
         },
         // наружу — только факт отказа базы, без текста ошибки (он мог бы выдать
         // адрес/детали подключения); подробности остаются в серверных логах
@@ -97,11 +121,34 @@ export async function handlePublic(req, res, url) {
     return true;
   }
 
+  // Форме отвечаем сразу, оценку ИИ и уведомление доделываем после ответа:
+  // модель порой думает до минуты, заявитель столько ждать не должен.
+  // Уведомление идёт после оценки, чтобы в Telegram сразу были балл и теги;
+  // не вышло оценить — уходит как есть, заявка в любом случае уже сохранена.
+  // Дубль не оцениваем (у оригинала оценка уже есть), а суточный предохранитель
+  // не даёт ботам со сменой IP накрутить счёт за платные запросы к модели.
+  afterResponse(
+    (async () => {
+      let lead = result.lead;
+      const wantAnalysis =
+        analysisEnabled() &&
+        !lead.is_duplicate &&
+        checkRateLimit('global', 'ai_auto', config.ai.dailyLimit, 24 * 60);
+      if (wantAnalysis) {
+        lead =
+          (await analyzeLead(lead.id).catch((err) => {
+            console.error('[ai] оценка заявки не удалась:', err.message);
+            return null;
+          })) || lead;
+      }
+      await notifyNewLead(lead, site, result.manager);
+    })(),
+  );
+
   // обычная <form> без JS: возвращаем на страницу, чтобы пользователь не увидел JSON
   const accept = String(req.headers.accept || '');
   if (accept.includes('text/html') && !accept.includes('application/json')) {
-    const back = input.redirect || req.headers.referer || '/';
-    send(res, 303, '', { Location: back });
+    send(res, 303, '', { Location: safeRedirect(site, input.redirect, req.headers.referer) });
     return true;
   }
 
