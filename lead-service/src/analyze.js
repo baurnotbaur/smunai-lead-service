@@ -15,9 +15,11 @@ import { getSetting } from './settings.js';
 import { broadcast } from './events.js';
 import { clip } from './util.js';
 
-const client = config.ai.apiKey
+// Отдельный ключ CRM-агента (config.ai.leadApiKey): оценка заявок и чат-бот
+// сайта считаются по разным счётчикам Google. Ключа нет — фича выключена.
+const client = config.ai.leadApiKey
   ? new GoogleGenAI({
-      apiKey: config.ai.apiKey,
+      apiKey: config.ai.leadApiKey,
       ...(config.ai.baseUrl ? { httpOptions: { baseUrl: config.ai.baseUrl } } : {}),
     })
   : null;

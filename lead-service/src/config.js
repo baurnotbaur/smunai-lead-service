@@ -81,6 +81,9 @@ export const config = {
   // сценарным: здоровается, просит телефон и зовёт менеджера.
   ai: {
     apiKey: process.env.GEMINI_API_KEY || '',
+    // Оценка заявок (CRM-агент) ходит своим ключом — так расходы бота и оценки
+    // считаются раздельно. Нет отдельного ключа — падаем на общий GEMINI_API_KEY.
+    leadApiKey: process.env.AI_LEAD_API_KEY || process.env.GEMINI_API_KEY || '',
     // lite-модель отвечает за секунду-две вместо пятнадцати у старших, а на
     // коротком ответе по готовой базе знаний разницы в качестве не видно
     model: process.env.BOT_MODEL || 'gemini-3.5-flash-lite',
